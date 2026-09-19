@@ -48,7 +48,7 @@
   {
    "q": "If a train goes 60 km in 45 minutes, how many km in 1 hour? Answer with just the number.",
    "want": "80",
-   "got": "80.00000000000001. 80. 80.00000000000001. 80. 8",
+   "got": "80.00000000000001. 80. 80.0. 80.00000000000001.",
    "correct": true
   },
   {
@@ -132,7 +132,7 @@
   {
    "q": "How many continents are there? Answer with just the number.",
    "want": "7",
-   "got": "7.",
+   "got": "7. 7. 7. 7. 7. 7. 7. 7. 7. 7. 7. 7. 7. 7. 7. 7.",
    "correct": true
   },
   {
