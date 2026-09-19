@@ -185,10 +185,15 @@ class PrefetchEnv:
               + self.cost["C_ms_per_upload"] * up)
         return 1000.0 / max(ms, 1e-6), hit, up
 
-    def reward(self, n_newly_covered, n_issued, n_late):
-        """Milliseconds of token time saved by this decision."""
+    def reward(self, n_correct, n_incorrect, n_late=0):
+        """Milliseconds of token time saved. See the module docstring: a correct
+        prefetch costs no extra upload, an incorrect one costs a whole upload."""
         B, C = self.cost["B_ms_per_miss"], self.cost["C_ms_per_upload"]
-        return B * n_newly_covered - C * n_issued - B * n_late
+        return B * n_correct - C * n_incorrect - B * n_late
+
+    def break_even_precision(self):
+        B, C = self.cost["B_ms_per_miss"], self.cost["C_ms_per_upload"]
+        return C / (B + C)
 
 
 if __name__ == "__main__":
@@ -203,7 +208,11 @@ if __name__ == "__main__":
     print(f"\nworst residual {cm['max_abs_residual_pct']:.1f}%")
     print(f"\nOne cache miss costs {cm['B_ms_per_miss'] * 1000:.1f} us of token time;")
     print(f"one upload costs {cm['C_ms_per_upload'] * 1000:.1f} us.")
-    print(f"So a prefetch only pays if its chance of converting a miss exceeds "
-          f"{100 * cm['C_ms_per_upload'] / max(cm['B_ms_per_miss'], 1e-9):.0f}%.")
+    be = cm["C_ms_per_upload"] / (cm["B_ms_per_miss"] + cm["C_ms_per_upload"])
+    print(f"\nA correct prefetch costs no extra upload -- the demand path would have")
+    print(f"fetched that expert anyway -- so it is worth +{cm['B_ms_per_miss'] * 1000:.0f} us.")
+    print(f"An incorrect one is a whole wasted upload: -{cm['C_ms_per_upload'] * 1000:.0f} us.")
+    print(f"BREAK-EVEN PRECISION = C/(B+C) = {100 * be:.0f}%.")
+    cm["break_even_precision"] = be
     os.makedirs(ARTIFACTS, exist_ok=True)
     json.dump(cm, open(os.path.join(ARTIFACTS, "cost_model.json"), "w"), indent=1)

@@ -34,5 +34,6 @@
    "residual_pct": 0.6780160855694287
   }
  ],
- "max_abs_residual_pct": 4.881475249912123
+ "max_abs_residual_pct": 4.881475249912123,
+ "break_even_precision": 0.751157024907436
 }

@@ -23,11 +23,13 @@ ACTION a -- how many of the ranked predictions to actually issue: {0, 1, 2, 3}.
 
 REWARD r -- in milliseconds of token time, from the cost model fitted to measured
     end-to-end throughput (artifacts/cost_model.json):
-        + B for every expert that would have missed and is resident in time
-        - C for every upload issued
-    B and C are measured, not chosen. That matters: with the C this machine
-    actually exhibits, the optimal policy is mostly a = 0, and an agent rewarded
-    on hit rate instead would confidently make the system slower.
+        + B per correct prefetch   (converts a miss; the upload was going to
+                                    happen on demand anyway, so it is not charged)
+        - C per incorrect prefetch (a whole upload that would never have occurred)
+    B and C are measured, not chosen, and together they set a break-even
+    precision of C/(B+C) = 75%. That is the number the policy is really trading
+    against: below it, issuing nothing beats issuing anything, and an agent
+    rewarded on hit rate instead would confidently make the system slower.
 
 TRANSITION -- the real engine's mechanics (PrefetchEnv): slots freed at the
     previous step boundary, uploads issued during the graph, publication at the
@@ -153,11 +155,12 @@ def run_episodes(tokens, ix, ranked, policy, env_kw, cost, device, train=False,
                 lp = dist.log_prob(a_t)
                 a = ACTIONS[int(a_t)]
             issued = env.prefetch(nxt, [e for e in cand if e not in env.resident[nxt]], a)
-            # what the prefetch will be worth: how many of the issued experts the
-            # next layer actually uses, and would otherwise have missed
+            # A correct prefetch converts a miss and adds no upload (the demand
+            # path would have fetched that expert anyway). An incorrect one is a
+            # wasted upload. See prefetch_env's docstring for the accounting.
             truth = set(int(e) for e in d["target"][r] if e >= 0)
-            gained = sum(1 for e in issued if e in truth)
-            rew = env.reward(gained, len(issued), 0)
+            n_correct = sum(1 for e in issued if e in truth)
+            rew = env.reward(n_correct, len(issued) - n_correct)
             rewards.append(rew)
             total_r += rew
             if lp is not None:

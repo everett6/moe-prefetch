@@ -121,25 +121,32 @@ def evaluate(model, ix, rows, device, batch=32768, ks=(8,), breakdown=False):
 
 
 def measure_latency(model, ix, device="cpu", n=2000):
-    """Single-row, single-thread latency: the shape the runtime actually calls it in.
+    """Single-row, single-thread latency -- the shape the runtime calls it in.
+    Batched throughput would flatter it by an order of magnitude and is the wrong
+    number: the engine predicts one layer at a time, between two FFNs.
 
-    Batched throughput would flatter it by an order of magnitude and would be the
-    wrong number -- the engine predicts one layer at a time, between two FFNs.
+    The input tensors are built ONCE, outside the timed loop. Including that
+    marshalling measured 70-170 us for models whose arithmetic is 9-18K MAC, i.e.
+    it was timing numpy-to-torch conversion rather than the model.
+
+    Even so this remains an upper bound: PyTorch's per-op dispatch costs a few
+    microseconds regardless of how little work an op does, and the deployed
+    predictor is C++ with no framework under it. The MAC count is the portable
+    budget check; the authoritative latency comes from the exported C++ path.
     """
     model = model.to("cpu").eval()
     torch.set_num_threads(1)
-    rows = ix.rows(0)[:n]
-    b, _, _ = ix.batch(rows[:1], "cpu")
+    rows = ix.rows(0)[:max(n, 1)]
+    inputs = [ix.batch(rows[i:i + 1], "cpu")[0] for i in range(min(n, len(rows)))]
     with torch.no_grad():
-        for _ in range(50):
+        for b in inputs[:50]:
             model(b)
         t0 = time.perf_counter()
-        for i in range(n):
-            bb, _, _ = ix.batch(rows[i:i + 1], "cpu")
-            model(bb)
+        for b in inputs:
+            model(b)
         el = time.perf_counter() - t0
     model.to(device)
-    return 1e6 * el / n
+    return 1e6 * el / len(inputs)
 
 
 def train_one(cfg, ix, device, log=True):
@@ -185,7 +192,7 @@ def train_one(cfg, ix, device, log=True):
         v = evaluate(model, ix, va, device)
         hist.append(v["recall@8"])
         if log:
-            print(f"    epoch {ep + 1:2d}/{cfg['epochs']}  loss {float(loss):.4f}  "
+            print(f"    epoch {ep + 1:2d}/{cfg['epochs']}  loss {loss.item():.4f}  "
                   f"val recall@8 {100 * v['recall@8']:.2f}%  hard {100 * v['recall@8_hard']:.2f}%",
                   file=sys.stderr, flush=True)
         if v["recall@8"] > best + 1e-5:
@@ -223,7 +230,9 @@ def main():
     ap.add_argument("--index", default=INDEX)
     ap.add_argument("--test", action="store_true")
     ap.add_argument("--configs", default="sweep")
-    ap.add_argument("--epochs", type=int, default=12)
+    ap.add_argument("--epochs", type=int, default=40)
+    ap.add_argument("--patience", type=int, default=6)
+    ap.add_argument("--batch", type=int, default=16384)
     ap.add_argument("--tag", default="FRESH_SUPERVISED")
     args = ap.parse_args()
 
@@ -252,6 +261,9 @@ def main():
         ]
     else:
         configs = json.loads(args.configs)
+    for c in configs:
+        c.setdefault("patience", args.patience)
+        c.setdefault("batch", args.batch)
 
     os.makedirs(CKPT, exist_ok=True)
     results = {}
@@ -288,12 +300,13 @@ def main():
         print("%-16s %8.2f%% %8.2f%% %11s %9s %8.1f %9s"
               % (n, 100 * i["val"]["recall@8"], 100 * i["val"]["recall@8_hard"],
                  f"{i['params']:,}", f"{i['macs']:,}", i["latency_us"],
-                 "ok" if i["latency_us"] <= 10.0 else "OVER"))
+                 "ok" if i["macs"] <= 20000 else "OVER"))
 
-    ok = {n: i for n, i in results.items() if i["latency_us"] <= 10.0}
+    ok = {n: i for n, i in results.items() if i["macs"] <= 20000}
     if not ok:
-        print("\nNothing fits the 10 us budget -- the winner must be chosen on speed.")
-        ok = results
+        print("\nNothing fits the 20K MAC budget; selecting the cheapest instead.")
+        ok = {min(results, key=lambda n: results[n]["macs"]): results[
+            min(results, key=lambda n: results[n]["macs"])]}
     best = max(ok, key=lambda n: ok[n]["val"]["recall@8"])
     print(f"\nSelected on validation, within budget: {best}")
     json.dump({n: {"val": i["val"], "params": i["params"], "macs": i["macs"],
