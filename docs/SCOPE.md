@@ -65,6 +65,41 @@ Drops the Q4_K_M requirement, which was the point of the exercise. An 80B at Q2
 would be ~25 GiB and fit. But AI2 already showed that quantizing down is the easy
 lever, and this project exists to stop doing that.
 
+## C1 result (2026-09-18): priced, and it is a separate project
+
+NVMe was measured directly rather than assumed —
+`experiments/c1_nvme_tier.py`, 300 random 2.92 MiB reads (one expert's worth)
+against a probe file larger than free RAM so the page cache cannot serve them:
+
+```
+per-expert read from NVMe:  median 1,164 us,  p90 1,291 us  (2.63 GB/s)
+  vs computing it on the CPU:   39 us   (30x)
+  vs fetching it from RAM:      57 us   (20x)
+```
+
+The RAM tier's hit rate then decides everything, and it is grounded in this
+project's own measurement rather than a guess: an LRU cache holding 52% of each
+layer's experts achieves **85.4%** on real traces (`m3_simulate_speedup.py`), and
+~26 GB of RAM over a 45–60 GB model is 43–58% resident — the same shape.
+
+| model | RAM hit | disk reads/token | added ms | tok/s |
+|---|---|---|---|---|
+| 80-layer | **85.4%** (measured shape) | 8.60 | 12.88 | **44.1** |
+| 80-layer | 90% | 5.89 | 9.88 | 50.8 |
+| 80-layer | 95% | 2.94 | 6.62 | 60.9 |
+| 62-layer | **85.4%** | 6.66 | 9.98 | **56.9** |
+
+**Verdict: feasible, roughly 44 tok/s for an 80-layer model — and a separate
+project rather than a continuation.** It is not the catastrophe the plan
+predicted (that guess was 5–10 tok/s, and it was wrong because it costed a whole
+token's experts against disk instead of only the ~9% that fall through two cache
+tiers). But it is a third of what the 30B now does, for a 45–60 GB download, a
+fresh trace capture, a re-fit of every per-layer probe, and an architecture whose
+routing behaviour nothing here has measured.
+
+Nothing transfers automatically except the code. That is a reasonable thing to
+start deliberately; it is not a reasonable thing to drift into.
+
 ## Recommendation
 
 **Start with Option A**, and treat Option B as the follow-on it naturally is.

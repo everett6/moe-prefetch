@@ -481,6 +481,22 @@ project is pointless** — the shelf already has the answer, and AI2's Phase E w
 declined for exactly this reason. Above it, this is the fastest Q4_K_M on a 12 GB
 card that we are aware of.
 
+## Reproducing
+
+Captured data is not in git — it is 667 MB of regenerable `.npz` and GitHub caps
+files at 100 MB. Regenerate it first; everything else runs from it.
+
+```bash
+python3 experiments/m2_capture.py          # ~4 min, CPU-only, writes m2_hidden.npz
+python3 experiments/a2_richer_inputs.py    # the predictor result (68.9%)
+python3 experiments/a2_bench.py            # end-to-end through the real engine
+python3 experiments/m5a_fixed_hop_cost.py  # the constant the verdict rests on
+python3 experiments/m5b_verdict.py         # collapses hit rates to tok/s
+```
+
+Capture is deterministic: the regeneration after this repo's history was
+rewritten produced 173,991 rows, byte-identical in shape to the original.
+
 ## Hardware
 
 RTX 5070 (12 GB, PCIe 5.0 x16), Ryzen 9 7950X, **29 GB usable RAM**, 499 GB NVMe.
