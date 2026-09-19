@@ -276,3 +276,29 @@ llama.cpp changes are in `patches/`, against PR #27861 at `bccbacd`.
   the C++ loader, and switched off, because measurement says it costs more than
   it returns. `LLAMA_MOE_PREDICTOR` enables it for anyone who wants to re-test
   that on different hardware.
+
+---
+
+# Update: measured on real prompts
+
+Everything above was measured on prompts I wrote. Replacing them with 6,720 real
+ones — GitHub issues, Stack Exchange questions, crowd-sourced programming tasks
+— changed three things. Full account in [`REAL-DATA-RESULTS.md`](REAL-DATA-RESULTS.md).
+
+**Throughput holds and improves.** 126.2 tok/s on real coding and
+decision-making traffic against a 78.7 baseline: **1.60×**, where the synthetic
+control measured 1.49×. n=69 per config, three interleaved rounds.
+
+**The error bar meant something narrower than it looked.** Repeating one prompt
+measures within-prompt noise (sd 2.70). Real workloads vary between prompts by
+7.27. The old `± 1.66` was repeatability, not workload uncertainty; the sem of
+the real-workload mean is 1.51.
+
+**The stopping criterion reverses, without changing the decision.** E5 said a
+perfect predictor was worth −0.4 tok/s on synthetic traces. On real traces, with
+prefetching gated to decode where it is not provably useless, it is worth
+**+11.0 tok/s**. But the model trained on real data reaches 50.1% warm precision
+against a 75% break-even, and even the best confidence-gated policy is worth at
+most +1.9 tok/s before eviction costs. So the predictor still does not ship —
+now because the model is a sixth of the way to a real target, rather than
+because the target was worthless.

@@ -3,9 +3,17 @@
 Running a mixture-of-experts model at **Q4_K_M** — the quality reference — on a
 12 GB GPU, at speeds previously reachable only by quantizing down to Q2_K.
 
-**Result: 118.2 ± 1.7 tok/s** (n=15), against 79.1 ± 0.9 for the shipped Q4_K_M
-config on the same machine, and a 110 tok/s bar. That is **1.49×**. Full numbers and method in
-[`docs/FINAL_RESULTS.md`](docs/FINAL_RESULTS.md).
+**Result: 126.2 tok/s on real coding and decision-making prompts** (n=69, sem
+1.5), against 78.7 for the shipped Q4_K_M config on the same machine, and a
+110 tok/s bar. That is **1.60×**. Method and full numbers in
+[`docs/FINAL_RESULTS.md`](docs/FINAL_RESULTS.md); the real-prompt work in
+[`docs/REAL-DATA-RESULTS.md`](docs/REAL-DATA-RESULTS.md).
+
+Earlier versions of this README reported 118.2 ± 1.7 tok/s. That was thirty
+repeats of a *single prompt I wrote myself*, so its `±` measured repeatability
+rather than anything about workloads. Measured across 23 real prompts the figure
+is higher and the spread is three times wider — real prompts differ from each
+other far more than one prompt differs from itself.
 
 Qwen3-30B-A3B, RTX 5070 (12 GB, 175 W), Ryzen 9 7950X, 29 GB RAM.
 
