@@ -1,9 +1,8 @@
 # Integration spec: putting this into llama.cpp
 
-The measurements are done and the verdict cleared its bar (129 tok/s at Q4_K_M
-against a 110 bar, 1.66x over today's 77.9). This is what remains, written so
-that whoever has root can treat it as a defined job rather than a research
-question.
+The measurements are done and the verdict cleared its bar (133 tok/s at Q4_K_M
+against a 110 bar, 1.71x over today's 77.9). The toolchain is built and the
+baseline is reproduced on it; what is left is the graph work.
 
 ## Correction: this never needed root, and it is already done
 
@@ -57,9 +56,7 @@ Run anything built this way with
 110 bar and the 133 projection are measured against a figure that now has two
 independent sources.
 
-## What remains
-
-## The shape of the change
+## What remains: the shape of the change
 
 Three pieces. The first two exist here in Python and are mechanical to port; the
 third is the only real engineering.
@@ -103,7 +100,8 @@ open issues are the honest preview of what this costs: duplicate dummy slot IDs
 breaking batched `mul_mat_id` at `n_tokens > 1`, expert tables mutating
 mid-prefill, and the cache being a per-process singleton.
 
-**Start from PR #27861 rather than from mainline.** It already has the cache and
+**Start from PR #27861 rather than from mainline** (mainline is cloned and
+built at `~/llama.cpp-build` as a working reference and baseline). It already has the cache and
 the graph surgery; this project's contribution is the predictor feeding it, which
 is additive. Reimplementing its cache to re-derive its bugs would be a poor use
 of the time.
