@@ -94,3 +94,35 @@ feature. Blocks of 8 leave 91% of kept rows with their predecessor.
 {1024, 2048, 4096, 8192} that holds prompt plus continuation, while n_predict
 and n_batch cycle on the prompt id so they stay orthogonal to length rather than
 confounded with it.
+
+## Capture is only reproducible at a fixed thread count
+
+`llama_cpp` defaults to 4 threads whatever the machine. On 32 cores that ran the
+capture — the long pole of the whole pipeline — at a fraction of its throughput.
+Measured on the same six prompts:
+
+| n_threads | time | rows |
+|---|---|---|
+| 4 (the default) | 127 s | 34,849 |
+| 16 | 98 s | 34,849 |
+| **24** | **84 s** | 34,849 |
+| 32 | 233 s | 34,849 |
+
+24 is the operating point: 1.51× over the default, and 32 is **2.8× slower than
+24**, which is oversubscription rather than anything subtle. Worth stating that
+the core count does not predict this — the 6× the hardware suggests is not
+available, because MoE inference here is bandwidth-bound.
+
+The row counts are identical at every thread count. The **checksums are not**.
+Comparing the 4-thread and 24-thread captures row by row:
+
+- every prompt is bit-identical up to one position, and 100% different after it
+- the divergence points are late: 578/601, 2158/2181, 256/258, 596/749
+- overall 12.5% of rows differ, and 11% of rows route to a different expert set
+
+This is greedy decoding diverging, not numerical noise in the features: a
+reduction-order difference flips one sampled token, and from there the sequences
+are simply different text. Both continuations are legitimate model behaviour, so
+neither dataset is more correct than the other — but capture is reproducible
+only at a fixed thread count, which is why `n_threads` is recorded in the
+manifest alongside the model hash and the git commit.

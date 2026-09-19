@@ -87,6 +87,7 @@ PER_REGISTER = int(os.environ.get("PER_REGISTER", "1400"))
 # prompts are not, so the budget is spent on prompt diversity: at most this many
 # positions are STORED per prompt, chosen after labelling.
 KEEP_POSITIONS = int(os.environ.get("KEEP_POSITIONS", "128"))
+N_THREADS = int(os.environ.get("N_THREADS", str(min(24, os.cpu_count() or 4))))
 SPLIT_SEED = int(os.environ.get("SPLIT_SEED", "20260918"))
 SCHEMA_VERSION = 3
 DATASET_VERSION = os.environ.get("DATASET_VERSION", "v4-20260919-real")
@@ -508,6 +509,7 @@ def main():
                         "per_register": PER_REGISTER,
                         "prompt_set": PROMPT_SET,
                         "keep_positions": KEEP_POSITIONS,
+                        "n_threads": N_THREADS,
                         "flush_rows": FLUSH_ROWS, "device": "cpu",
                         "sampling": "greedy"},
             "features": {"hidden_tensor": "ffn_inp-<L>", "hidden_dtype": "float16",
@@ -561,6 +563,12 @@ def main():
         # n_ubatch must not exceed n_batch; its default is 512 and the plans go
         # down to 64.
         cp.n_ubatch = min(plan["n_batch"], 512)
+        # llama_cpp's default is 4 threads regardless of the machine. On 32
+        # cores that runs the capture at a fraction of the available throughput,
+        # and capture is the long pole of the whole pipeline. Recorded in the
+        # manifest because thread count can change floating-point reduction
+        # order, and so is part of how the data was made.
+        cp.n_threads = cp.n_threads_batch = N_THREADS
         ctx = lc.llama_init_from_model(model, cp)
         CUR["pid"], CUR["pos"] = pid, 0
         raw = prompt.encode()
