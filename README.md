@@ -55,6 +55,58 @@ The honest reading recorded there: *"the exploitable structure is almost entirel
 'experts recur as themselves across adjacent tokens' — not richer cross-expert
 transition patterns."*
 
+## Milestone 3 gate (2026-09-18): simulated speedup — verdict is *not yet*
+
+Simulated on the real held-out traces, with AI2's measured timing constants.
+Today's Q4_K_M is 77.9 tok/s. The bar is **110** (what `ud-q3_k_xl` already
+does at Q4_K_M-equal accuracy).
+
+The modelling point that decides everything, from AI2's `expert_cache_sim.py`:
+**if even one of a layer's 8 experts is missing from VRAM, the hidden state hops
+to the CPU and back, and the layer pays close to the full CPU-layer cost.** So
+per-expert hit rate is the wrong headline. What matters is the fraction of
+layers where *all eight* are resident — and that is a far harsher bar.
+
+At **capacity 66 experts/layer**, which is the largest cache that fits (66 →
+10.8 GB with non-expert weights; 80 → 12.8 GB, over the card):
+
+| policy | expert hit | **all-8 resident** | tok/s (pessimistic – optimistic) |
+|---|---|---|---|
+| today (whole layers) | — | — | 47.0 |
+| LRU cache alone | 85.4% | 59.5% | 82.6 – 123.2 |
+| **LRU + ridge probe** | **90.8%** | **70.9%** | **96.6 – 137.0** |
+| oracle (perfect prediction) | 99.5% | 98.5% | 163.8 – 168.0 |
+
+### What this says, plainly
+
+1. **The range straddles the bar.** 96.6 – 137.0 tok/s against a 110 target. The
+   honest answer to "does this work" is *we cannot tell yet*, and the reason is
+   worth naming precisely.
+2. **The uncertainty is in the timing model, not the hit rate.** The hit rates
+   come from replaying real traces and are solid. The 40-point spread comes
+   entirely from one unknown: whether a layer with a single miss pays the whole
+   CPU round trip or just that expert's share. **That is measurable directly,
+   without building any of this** — and it is the next thing to do.
+3. **Prediction's marginal value over plain LRU is real but modest**: +11.4
+   points of all-8-resident, roughly +14 tok/s. The bulk of the win is the cache,
+   which llama.cpp PR #27861 already implements. The predictor is an improvement
+   on someone else's mechanism, not a mechanism of its own.
+4. **The oracle says most of the value is still unclaimed.** A perfect predictor
+   would add +39 points of all-8-resident where the ridge probe adds +11.4. The
+   ceiling is 163–168 tok/s. 59.7% recall is not nearly enough, because eight
+   independent chances to miss is unforgiving — which is also why the MLP is
+   worth another attempt.
+
+### The recommendation
+
+**Do not build the prefetcher yet.** Measure the partial-miss cost first: take
+Q4_K_M at a fixed split and time a layer where 1 of 8 experts is host-resident
+against one where all 8 are. That single number collapses the 96.6 – 137.0 range
+to a point, and it decides whether this project clears its own bar. It is an
+afternoon's work against a llama.cpp build, not a research programme.
+
+---
+
 ## Milestone 2 result (2026-09-18): 59.7% on a clean split, +20.2 points over the bar
 
 Milestone 1's 51.3% was a ceiling — ridge strength and ensemble weight were both

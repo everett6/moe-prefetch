@@ -1,0 +1,122 @@
+{
+ "today_ms": 12.84,
+ "constants": {
+  "slope_ms": 0.3208,
+  "floor_ms": 5.876,
+  "fetch_ms": 0.05706
+ },
+ "test_registers": [
+  "science",
+  "technical"
+ ],
+ "rows": [
+  {
+   "capacity": 32,
+   "policy": "none",
+   "expert_hit": 0.0,
+   "full_layer_rate": 0.0,
+   "fetches_per_token": 0.0,
+   "pessimistic_tok_s": 47.004850900612944,
+   "optimistic_tok_s": 47.004850900612944
+  },
+  {
+   "capacity": 32,
+   "policy": "lru",
+   "expert_hit": 0.7107564623294907,
+   "full_layer_rate": 0.26321226492616157,
+   "fetches_per_token": 0.0,
+   "pessimistic_tok_s": 58.06744934522804,
+   "optimistic_tok_s": 96.80647360019168
+  },
+  {
+   "capacity": 32,
+   "policy": "lru+predict",
+   "expert_hit": 0.8189726011316414,
+   "full_layer_rate": 0.4020613715868805,
+   "fetches_per_token": 104.1867266591676,
+   "pessimistic_tok_s": 66.29849707587843,
+   "optimistic_tok_s": 115.42636023254258
+  },
+  {
+   "capacity": 32,
+   "policy": "oracle",
+   "expert_hit": 0.9866498016105932,
+   "full_layer_rate": 0.9795271523489776,
+   "fetches_per_token": 105.74690663667042,
+   "pessimistic_tok_s": 161.51829530506618,
+   "optimistic_tok_s": 164.43117834851466
+  },
+  {
+   "capacity": 66,
+   "policy": "none",
+   "expert_hit": 0.0,
+   "full_layer_rate": 0.0,
+   "fetches_per_token": 0.0,
+   "pessimistic_tok_s": 47.004850900612944,
+   "optimistic_tok_s": 47.004850900612944
+  },
+  {
+   "capacity": 66,
+   "policy": "lru",
+   "expert_hit": 0.8542630244406357,
+   "full_layer_rate": 0.5949334397670979,
+   "fetches_per_token": 0.0,
+   "pessimistic_tok_s": 82.55336282477292,
+   "optimistic_tok_s": 123.15094635290222
+  },
+  {
+   "capacity": 66,
+   "policy": "lru+predict",
+   "expert_hit": 0.907537623553166,
+   "full_layer_rate": 0.7093653886788909,
+   "fetches_per_token": 27.617547806524186,
+   "pessimistic_tok_s": 96.60614872050927,
+   "optimistic_tok_s": 136.99056764123432
+  },
+  {
+   "capacity": 66,
+   "policy": "oracle",
+   "expert_hit": 0.9949346136689128,
+   "full_layer_rate": 0.9852323151691592,
+   "fetches_per_token": 53.917885264341955,
+   "pessimistic_tok_s": 163.8431382558323,
+   "optimistic_tok_s": 167.95434901029972
+  },
+  {
+   "capacity": 96,
+   "policy": "none",
+   "expert_hit": 0.0,
+   "full_layer_rate": 0.0,
+   "fetches_per_token": 0.0,
+   "pessimistic_tok_s": 47.004850900612944,
+   "optimistic_tok_s": 47.004850900612944
+  },
+  {
+   "capacity": 96,
+   "policy": "lru",
+   "expert_hit": 0.9244388749325007,
+   "full_layer_rate": 0.7639518230695185,
+   "fetches_per_token": 0.0,
+   "pessimistic_tok_s": 105.14402144364736,
+   "optimistic_tok_s": 142.0551314814644
+  },
+  {
+   "capacity": 96,
+   "policy": "lru+predict",
+   "expert_hit": 0.9450115042377856,
+   "full_layer_rate": 0.8263799215833588,
+   "fetches_per_token": 13.10461192350956,
+   "pessimistic_tok_s": 116.9662955054856,
+   "optimistic_tok_s": 148.74898710785862
+  },
+  {
+   "capacity": 96,
+   "policy": "oracle",
+   "expert_hit": 0.9984739276406921,
+   "full_layer_rate": 0.9938957105627685,
+   "fetches_per_token": 28.376827896512935,
+   "pessimistic_tok_s": 167.50429168545236,
+   "optimistic_tok_s": 169.50591697547412
+  }
+ ]
+}
