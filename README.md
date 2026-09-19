@@ -55,6 +55,61 @@ The honest reading recorded there: *"the exploitable structure is almost entirel
 'experts recur as themselves across adjacent tokens' — not richer cross-expert
 transition patterns."*
 
+## Milestone 4 (2026-09-18): the prefetcher is built and it works
+
+`src/prefetch_engine.py` and `src/predictor.py` are a working async prefetcher —
+a per-layer LRU cache in VRAM, refilled by real pinned-memory H2D copies on a
+dedicated CUDA stream, driven by the trained per-layer probes. Everything except
+the llama.cpp graph surgery is real: the bytes move, the deadlines are enforced
+with CUDA events, and an expert whose copy has not landed when the layer runs is
+counted as **late**, never as a hit.
+
+Measured on 250 held-out tokens, capacity 66/layer (9.7 GB of VRAM), with the
+main stream running a matmul calibrated to Q4_K_M's real 0.27 ms/layer compute:
+
+| policy | expert hit | late | **all-8 on time** | GB moved | projected tok/s |
+|---|---|---|---|---|---|
+| today (whole layers) | — | — | — | — | 77.9 |
+| LRU cache alone | 81.5% | 3.62% | 57.3% | 43.5 | 80.3 – 114.6 |
+| **LRU + ridge probe** | **86.5%** | **4.64%** | **66.9%** | 48.3 | **91.1 – 125.7** |
+
+**The central assumption survived.** m3 assumed a prefetch issued during layer L
+has landed before layer L+1 needs it. Measured: **4.64% arrive late**. The reason
+is in the traffic column — the engine demands ~7 GB/s on average against the
+53.66 GB/s AI2 measured available, so the PCIe link is nowhere near the
+constraint. Overlap works.
+
+**The simulation was optimistic by almost exactly the lateness.** m3 predicted
+90.8% expert hit and 70.9% all-8; the real engine gets 86.5% and 66.9%. The gap
+is the 4.6% that simulation assumed away. That is a good sign for the model:
+it was wrong in the direction and by the amount it should have been.
+
+**Prediction's value over plain LRU, now measured rather than simulated:**
++5.0 points of expert hit and **+9.7 points of all-8-on-time**, worth roughly
++11 tok/s at the pessimistic end.
+
+### Two bugs found while building it, both of which flattered the result
+
+1. **`admit()` marked a missed expert resident without copying it.** The
+   no-prefetch LRU baseline got free hits and reported 0.0 GB of traffic — the
+   comparison was rigged in favour of the thing the predictor had to beat. Fixed:
+   a miss now issues a real copy, and LRU pays 43.5 GB for its hit rate.
+2. **The matmul calibration overshot** (0.496 ms against a 0.27 ms target),
+   giving the copy stream nearly twice the compute to hide behind. That
+   understates lateness, which is the one number the benchmark exists to produce.
+   Replaced with a binary search.
+
+### Where that leaves the verdict
+
+**91.1 – 125.7 tok/s against a 110 bar.** Still straddling, and still for the
+same single reason: whether a layer with one miss pays the whole CPU round trip
+or just that expert's share. Everything else is now measured rather than
+assumed — hit rates on real traces, copies on real hardware, deadlines on real
+events. That one timing constant is the last thing standing between this and a
+yes or no, and it needs a llama.cpp build to measure.
+
+---
+
 ## Milestone 3 gate (2026-09-18): simulated speedup — verdict is *not yet*
 
 Simulated on the real held-out traces, with AI2's measured timing constants.
