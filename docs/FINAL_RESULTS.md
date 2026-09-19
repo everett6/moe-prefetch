@@ -6,15 +6,20 @@ Qwen3-30B-A3B at **Q4_K_M** on one RTX 5070 (12 GB, 175 W cap), Ryzen 9 7950X,
 
 ## Headline
 
-| | tok/s (mean ± sd, n=15) |
-|---|---|
-| AI2's shipped Q4_K_M config (`-ncmoe 22`, no cache) | 85.1 ± 0.97 |
-| **This work** (`-ncmoe 48 --moe-expert-cache 72`, early issue) | **116.8 ± 1.60** |
-| PR #27861's cache as it ships, same cache size | 35.5 ± 0.61 |
+| | tok/s (mean ± sd) | n | per-session means |
+|---|---|---|---|
+| AI2's shipped Q4_K_M config (`-ncmoe 22`, no cache) | 81.7 ± 3.60 | 30 | 85.1, 78.3 |
+| **This work** (`-ncmoe 48 --moe-expert-cache 72`, early issue) | **113.9 ± 3.44** | 30 | 116.8, 111.1 |
+| PR #27861's cache as it ships, same cache size | 35.5 ± 0.61 | 15 | 35.5 |
 
-**1.37× over the baseline, 3.29× over the cache as shipped, and the 110 tok/s
-bar is cleared by 6.8.** Measured by interleaving the three configurations across
-three rounds of five requests, so drift affects all of them equally.
+**1.39× over the baseline, 3.21× over the cache as shipped, and the 110 tok/s
+bar is cleared by 3.9.** Measured by interleaving the configurations within each
+session, so drift affects them equally, and pooled over two independent sessions.
+
+The absolute level drifts between sessions — the baseline itself measured 85.1
+once and 78.3 the next time — while the ratio does not (1.37× then 1.42×). Both
+are reported rather than the better one, because a single session's absolute
+number is the less reliable half of this measurement.
 
 The bar matters because it is what `ud-q3_k_xl` already does at Q4_K_M-equal
 accuracy. Below it, quantizing down was the better answer; above it, this is
@@ -60,9 +65,10 @@ slots freed at the previous step boundary, fixes it:
 | worker backlog | 3,134 jobs | 1 |
 | tok/s | 33.1 | **104.0** |
 
-and re-tuning the cache size on a cache that works takes it to 116.8 at 72 slots.
-(78 slots fails to allocate; 84 *silently* falls back to no cache, which is its
-own bug.)
+and re-tuning the cache size on a cache that works takes it to 113.9 at 72 slots.
+72 is the VRAM ceiling: 78 fails to allocate, and 84, 96 and 104 all *silently*
+fall back to running with no cache at all — a second way this cache can be
+switched on and do nothing.
 
 ## The reset, and the fresh model
 
@@ -133,6 +139,23 @@ It converged to depth 0. The useful output is the sweep:
 **Prefetching starts to pay below ~35 µs per upload, four times cheaper than
 measured.** That is the number to engineer against, and it is why the next
 section exists.
+
+## Two optimisations tried and rejected
+
+**More upload threads: no gain.** The cache uses one worker thread doing three
+serially-synchronised copies per expert, and E1 says batching those syncs would
+recover 40% of the bandwidth, so overlapping them across threads should have
+helped. Measured at 1, 2, 3, 4 and 6 threads: **114.2, 113.0, 110.8, 111.7,
+109.4 tok/s**. More threads trend slightly worse. The copies already overlap with
+compute on their own thread, and the limit is host memory bandwidth shared with
+the CPU expert FFN — which another thread cannot add to. The default stays at
+one; the knob (`LLAMA_MOE_UPLOAD_THREADS`) is kept because a machine with more
+memory channels may answer differently.
+
+**Shrinking the KV cache to buy cache slots: no gain.** The server allocates four
+context slots by default, so `-np 1` looked like free VRAM. It is not: VRAM is
+identical at 11,132 MiB either way, and 84/96/104 slots still fall back to no
+cache. The KV cache was never the constraint.
 
 ## The optimisation that is still on the table
 

@@ -1,5 +1,5 @@
 diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
-index 4e0732e..0b49f90 100644
+index 4e0732e..b0c9173 100644
 --- a/src/llama-moecache.cpp
 +++ b/src/llama-moecache.cpp
 @@ -1,5 +1,7 @@
@@ -10,7 +10,15 @@ index 4e0732e..0b49f90 100644
  #include "llama-impl.h"
  #include "llama-model.h"
  
-@@ -30,6 +32,19 @@ struct layer_state {
+@@ -14,6 +16,7 @@
+ #include <map>
+ #include <mutex>
+ #include <string>
++#include <algorithm>
+ #include <thread>
+ #include <vector>
+ 
+@@ -30,6 +33,19 @@ struct layer_state {
  
      std::vector<bool>     slot_in_flight; // slot has an upload pending
  
@@ -30,7 +38,7 @@ index 4e0732e..0b49f90 100644
      uint64_t n_hit  = 0;
      uint64_t n_miss = 0;
  };
-@@ -45,13 +60,23 @@ struct moe_cache {
+@@ -45,21 +61,40 @@ struct moe_cache {
      int32_t n_slots     = 0;
      int32_t max_inserts = 2;
  
@@ -56,7 +64,28 @@ index 4e0732e..0b49f90 100644
  
      std::vector<ggml_context *>         ctxs;
      std::vector<ggml_backend_buffer_t>  bufs;
-@@ -79,6 +104,60 @@ int parse_layer_from_name(const char * name) {
+ 
+-    // async upload worker: slices are copied to the device off the decode
+-    // thread; the new table mapping is only published at a later step() once
+-    // the upload has completed, so a running graph never reads a torn slot
+-    std::thread              worker;
++    // Async upload workers. Slices are copied to the device off the decode
++    // thread; the new table mapping is only published at a later step() once the
++    // upload has completed, so a running graph never reads a torn slot.
++    //
++    // More than one thread because ggml_backend_tensor_set copies from pageable
++    // memory and then synchronises the whole stream, once per tensor and three
++    // tensors per expert. Serially that measures 188.8 us/expert (16.2 GB/s);
++    // with the syncs overlapped it approaches the 22.7 GB/s the same transfers
++    // reach when synchronised once. Each thread has its own cudaStreamPerThread,
++    // so the copies genuinely overlap, and the jobs are independent: every job
++    // owns a slot that is in no table, so two workers can never touch the same
++    // bytes.
++    std::vector<std::thread> workers;
+     std::mutex               wmtx;
+     std::condition_variable  wcv;
+     std::deque<upload_job>   todo;
+@@ -79,6 +114,60 @@ int parse_layer_from_name(const char * name) {
      return atoi(name + 4);
  }
  
@@ -109,7 +138,7 @@ index 4e0732e..0b49f90 100644
 +        issued++;
 +    }
 +    if (issued) {
-+        mc->wcv.notify_one();
++        mc->wcv.notify_all();
 +    }
 +    return issued;
 +}
@@ -117,7 +146,7 @@ index 4e0732e..0b49f90 100644
  void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
      moe_cache * mc = (moe_cache *) ud;
  
-@@ -102,12 +181,20 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+@@ -102,12 +191,20 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
      }
  
      std::lock_guard<std::mutex> lock(mc->mtx);
@@ -138,7 +167,7 @@ index 4e0732e..0b49f90 100644
              const int32_t slot = ls->expert_slot[id];
              if (slot >= 0) {
                  ls->n_hit++;
-@@ -124,6 +211,32 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+@@ -124,6 +221,32 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
              }
          }
      }
@@ -171,7 +200,7 @@ index 4e0732e..0b49f90 100644
  }
  
  void upload_slice(ggml_tensor * dst_c, const ggml_tensor * src, int32_t expert, int32_t slot) {
-@@ -151,7 +264,12 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+@@ -151,7 +274,12 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
      }
      [&]() {
          if (n_slots <= 0) {
@@ -185,7 +214,7 @@ index 4e0732e..0b49f90 100644
              return;
          }
  
-@@ -161,6 +279,40 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+@@ -161,6 +289,40 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
              mc->max_inserts = max_inserts;
          }
  
@@ -226,7 +255,7 @@ index 4e0732e..0b49f90 100644
          // collect the host-resident expert layers, grouped by the device buffer
          // type of that layer's router (the cache lives next to the router)
          struct cand { int il; const llama_layer * l; };
-@@ -275,12 +427,17 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+@@ -275,47 +437,67 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
              ls.expert_slot.assign(n_expert, -1);
              ls.slot_last_use.assign(n_slots, 0);
              ls.slot_in_flight.assign(n_slots, false);
@@ -244,15 +273,67 @@ index 4e0732e..0b49f90 100644
              vram += ggml_nbytes(ls.pub.up_c) + ggml_nbytes(ls.pub.gate_c) + ggml_nbytes(ls.pub.down_c);
              LLAMA_LOG_DEBUG("moe-cache: init layer %d '%s' %zu bytes/expert\n",
                      ls.pub.il, ls.pub.up_src->name, ls.pub.up_src->nb[2]);
-@@ -306,6 +463,7 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
-                     std::lock_guard<std::mutex> lk(mc->wmtx);
-                     j.done = true;
-                     mc->done.push_back(j);
-+                    mc->n_copied++;
+         }
+ 
+-        mc->worker = std::thread([mc]() {
+-            for (;;) {
+-                upload_job j;
+-                {
+-                    std::unique_lock<std::mutex> lk(mc->wmtx);
+-                    mc->wcv.wait(lk, [mc]() { return mc->stop || !mc->todo.empty(); });
+-                    if (mc->stop) {
+-                        return;
++        // Measured: 1, 2, 3, 4 and 6 threads give 114.2, 113.0, 110.8, 111.7 and
++        // 109.4 tok/s. More threads do not help and trend slightly worse -- the
++        // copies already overlap with compute on their own thread, and the limit
++        // is host memory bandwidth shared with the CPU expert FFN, which another
++        // thread cannot add to. Default stays at one; the knob is kept because
++        // the answer may differ on a machine with more memory channels.
++        int n_workers = 1;
++        if (const char * e = getenv("LLAMA_MOE_UPLOAD_THREADS")) {
++            n_workers = std::max(1, atoi(e));
++        }
++        for (int w = 0; w < n_workers; ++w) {
++            mc->workers.emplace_back([mc]() {
++                for (;;) {
++                    upload_job j;
++                    {
++                        std::unique_lock<std::mutex> lk(mc->wmtx);
++                        mc->wcv.wait(lk, [mc]() { return mc->stop || !mc->todo.empty(); });
++                        if (mc->stop) {
++                            return;
++                        }
++                        j = mc->todo.front();
++                        mc->todo.pop_front();
++                    }
++                    auto & ls = mc->layers[j.layer_idx];
++                    upload_slice(ls.pub.up_c,   ls.pub.up_src,   j.expert, j.slot);
++                    upload_slice(ls.pub.gate_c, ls.pub.gate_src, j.expert, j.slot);
++                    upload_slice(ls.pub.down_c, ls.pub.down_src, j.expert, j.slot);
++                    {
++                        std::lock_guard<std::mutex> lk(mc->wmtx);
++                        j.done = true;
++                        mc->done.push_back(j);
++                        mc->n_copied++;
+                     }
+-                    j = mc->todo.front();
+-                    mc->todo.pop_front();
+-                }
+-                auto & ls = mc->layers[j.layer_idx];
+-                upload_slice(ls.pub.up_c,   ls.pub.up_src,   j.expert, j.slot);
+-                upload_slice(ls.pub.gate_c, ls.pub.gate_src, j.expert, j.slot);
+-                upload_slice(ls.pub.down_c, ls.pub.down_src, j.expert, j.slot);
+-                {
+-                    std::lock_guard<std::mutex> lk(mc->wmtx);
+-                    j.done = true;
+-                    mc->done.push_back(j);
                  }
-             }
-         });
-@@ -314,8 +472,10 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+-            }
+-        });
++            });
++        }
+ 
+         ggml_set_moe_obs_callback(moe_obs_cb, mc);
          g_cache = mc;
          g_init_done = true;
  
@@ -265,7 +346,7 @@ index 4e0732e..0b49f90 100644
      }();
  }
  
-@@ -347,6 +507,7 @@ void llama_moe_cache_step() {
+@@ -347,6 +529,7 @@ void llama_moe_cache_step() {
              ls.slot_last_use[j.slot]   = ++mc->clock;
              ls.slot_in_flight[j.slot]  = false;
              set_table_entry(ls.pub, j.expert, j.slot);
@@ -273,7 +354,7 @@ index 4e0732e..0b49f90 100644
          }
          mc->done.clear();
      }
-@@ -358,49 +519,99 @@ void llama_moe_cache_step() {
+@@ -358,49 +541,99 @@ void llama_moe_cache_step() {
      //    entry now), then hand the slice copies to the worker
      for (size_t li = 0; li < mc->layers.size(); ++li) {
          auto & ls = mc->layers[li];
@@ -368,7 +449,8 @@ index 4e0732e..0b49f90 100644
          }
 -        ls.pending.clear();
      }
-     mc->wcv.notify_one();
+-    mc->wcv.notify_one();
++    mc->wcv.notify_all();
  
      if (mc->n_steps % 512 == 0) {
          uint64_t h = 0, m = 0;
