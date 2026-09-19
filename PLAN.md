@@ -103,7 +103,46 @@ true experts are revealed microseconds later when the layer runs. That is a free
 training signal being thrown away, and it is exactly the mechanism AI2 already
 built for its draft model in `draft_trainer.py`.
 
-**B1. Online ridge.** Ridge regression has an exact incremental form (recursive
+**B1/B2 — DONE 2026-09-18. The mechanism works; it does not pay here.**
+
+Online adaptation makes the predictor **substantially better in isolation and
+makes no difference to the system.** Both halves are the result.
+
+*In isolation*, streaming the held-out registers (41,704 steps, predict-then-
+update so nothing is scored on data it has learned from):
+
+| rule | recall@8 | first quarter | last quarter |
+|---|---|---|---|
+| frozen | 65.1% | 65.8% | 61.8% |
+| **LMS, η=0.001** | **78.1%** | 78.8% | 78.5% |
+| RLS (exact incremental ridge) | 77.5% | 77.6% | 77.9% |
+| LMS, η=0.02 (first guess) | 6.9% | — | diverged |
+
+**+13.0 points**, and the frozen probe *degrades* 4 points across the stream
+while the online one holds. The cheap rule beats the exact one: LMS at a quarter
+of RLS's cost scores slightly higher, because RLS's exactness is fitted to a
+distribution that is itself shifting.
+
+*End to end through the real prefetch engine*, the entire held-out stream
+(889 tokens, the same 41.7K steps):
+
+| policy | expert hit | all-8 on time | GB moved |
+|---|---|---|---|
+| frozen predictor | 90.8% | **72.7%** | 173.7 |
+| online predictor | 90.7% | 70.6% | 157.1 |
+
+**No gain.** Reproduced at 250 tokens and at 889. The reason is that the LRU
+cache already holds most of what any predictor would ask for: the predictor only
+contributes at the margin, on experts the cache lacks, and a probe that is 13
+points better overall is not necessarily better *there*. Online moved 10% less
+traffic, so it is making different predictions, not worse ones — they just are
+not the ones that were missing.
+
+This is the third time in this repo that a component-level improvement did not
+survive system-level measurement, and the second where the component metric was
+the misleading one. **B3 (persistence) is not worth building.**
+
+**B1 (original text). Online ridge.** Ridge regression has an exact incremental form (recursive
 least squares), so the probe can be updated per token without retraining. Bound
 the per-token cost: it must stay far below the 2.92 MiB fetch it informs.
 

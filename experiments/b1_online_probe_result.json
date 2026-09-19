@@ -1,0 +1,30 @@
+{
+ "test_registers": [
+  "science",
+  "technical"
+ ],
+ "steps": 41704,
+ "d": 512,
+ "lam": 100.0,
+ "eta": 0.005,
+ "results": {
+  "frozen": {
+   "mean": 0.6512324956838672,
+   "first_quarter": 0.6578265873777096,
+   "last_quarter": 0.6176026280452714,
+   "us_per_step": 9.73662711004032
+  },
+  "lms": {
+   "mean": 0.6863909936696719,
+   "first_quarter": 0.7242710531363898,
+   "last_quarter": 0.6566156723575676,
+   "us_per_step": 38.23471012376132
+  },
+  "rls": {
+   "mean": 0.7750635430654134,
+   "first_quarter": 0.77607663533474,
+   "last_quarter": 0.7790379819681565,
+   "us_per_step": 163.55971921162416
+  }
+ }
+}
