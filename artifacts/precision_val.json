@@ -1,0 +1,55 @@
+{
+ "break_even": 0.751157024907436,
+ "by_depth": {
+  "1": {
+   "issued": 47963,
+   "correct": 23590,
+   "precision": 0.49183745804057294,
+   "warm_issued": 43730,
+   "warm_correct": 19406,
+   "warm_precision": 0.44376857992225016
+  },
+  "2": {
+   "issued": 68523,
+   "correct": 38903,
+   "precision": 0.5677363804853844,
+   "warm_issued": 60075,
+   "warm_correct": 30612,
+   "warm_precision": 0.5095630461922597
+  },
+  "3": {
+   "issued": 83149,
+   "correct": 51895,
+   "precision": 0.6241205546669233,
+   "warm_issued": 70489,
+   "warm_correct": 39597,
+   "warm_precision": 0.56174722297096
+  },
+  "4": {
+   "issued": 96008,
+   "correct": 63847,
+   "precision": 0.6650174985417882,
+   "warm_issued": 79140,
+   "warm_correct": 47668,
+   "warm_precision": 0.6023249936820824
+  },
+  "6": {
+   "issued": 118788,
+   "correct": 84681,
+   "precision": 0.7128750378826144,
+   "warm_issued": 93511,
+   "warm_correct": 61533,
+   "warm_precision": 0.658029536632054
+  },
+  "8": {
+   "issued": 136466,
+   "correct": 98835,
+   "precision": 0.7242463324197969,
+   "warm_issued": 102799,
+   "warm_correct": 70532,
+   "warm_precision": 0.6861156236928375
+  }
+ },
+ "ckpt": "FRESH_SUPERVISED-linearctx-lr1e2.pt",
+ "split": "val"
+}

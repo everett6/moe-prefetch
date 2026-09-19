@@ -50,9 +50,9 @@ capture() {
 }
 capture "off"        0
 capture "off2"       0                              # the control: same config twice
-capture "shipped"   66 LLAMA_MOE_EARLY_ISSUE=0
-capture "early"     66 LLAMA_MOE_EARLY_ISSUE=1
-capture "early_p3"  66 LLAMA_MOE_EARLY_ISSUE=1 LLAMA_MOE_PREDICTOR=$PRED LLAMA_MOE_PREDICT_TOP=3
+capture "shipped"   72 LLAMA_MOE_EARLY_ISSUE=0
+capture "early"     72 LLAMA_MOE_EARLY_ISSUE=1
+capture "early_p3"  72 LLAMA_MOE_EARLY_ISSUE=1 LLAMA_MOE_PREDICTOR=$PRED LLAMA_MOE_PREDICT_TOP=3
 echo
 for f in off2 shipped early early_p3; do
   if cmp -s "$OUTDIR/off.txt" "$OUTDIR/$f.txt"; then

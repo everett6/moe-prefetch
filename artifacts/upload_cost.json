@@ -1,0 +1,44 @@
+{
+ "expert_bytes": 3061841,
+ "per_tensor_bytes": 1020613,
+ "n": 300,
+ "pageable, sync per tensor (ggml)": {
+  "us_per_tensor": 62.925523331311226,
+  "us_per_expert": 188.77656999393366,
+  "gb_per_s": 16.219390998037483
+ },
+ "pageable, sync per expert": {
+  "us_per_tensor": 44.99118333721223,
+  "us_per_expert": 134.9735500116367,
+  "gb_per_s": 22.68474823205009
+ },
+ "pinned,   sync per tensor": {
+  "us_per_tensor": 37.51971999008674,
+  "us_per_expert": 112.55915997026023,
+  "gb_per_s": 27.202059795124477
+ },
+ "pinned,   sync per expert": {
+  "us_per_tensor": 28.871086663760554,
+  "us_per_expert": 86.61325999128167,
+  "gb_per_s": 35.35071881959182
+ },
+ "pinned,   dedicated stream": {
+  "us_per_tensor": 28.594393321933843,
+  "us_per_expert": 85.78317996580154,
+  "gb_per_s": 35.69278967299462
+ },
+ "pageable, sync per tensor, loaded": {
+  "us_per_tensor": 99.13756000363112,
+  "us_per_expert": 297.4126800108934,
+  "gb_per_s": 10.29492421065522
+ },
+ "pinned,   sync per expert, loaded": {
+  "us_per_tensor": 31.57843333610799,
+  "us_per_expert": 94.73530000832397,
+  "gb_per_s": 32.31995887204632
+ },
+ "fitted_us": 141.6,
+ "ggml_path_us": 188.77656999393366,
+ "best_path_us": 85.78317996580154,
+ "reducible_fraction": 0.5455835437175377
+}

@@ -1,0 +1,458 @@
+{
+ "dataset_version": "v3-20260919-fresh",
+ "schema_version": 3,
+ "created_utc": "2026-09-19T06:23:31Z",
+ "completed_utc": "2026-09-19T08:13:25Z",
+ "git_commit": "facb2e866f97113c0c03d69c821583ad84da2fbf",
+ "model": {
+  "path": "/home/everett/.lmstudio/models/lmstudio-community/Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+  "bytes": 18556685824,
+  "quant": "Q4_K_M",
+  "arch": "qwen3moe",
+  "header_sha256": "badc60a696ba38ee28c983dd3861e95cc4a44cb55c8731e00936d1a5df4546c7"
+ },
+ "capture": {
+  "n_predict_override": null,
+  "session_plans": [
+   {
+    "n_predict": 64,
+    "n_ctx": 512,
+    "n_batch": 512,
+    "label": "short"
+   },
+   {
+    "n_predict": 150,
+    "n_ctx": 1024,
+    "n_batch": 256,
+    "label": "medium"
+   },
+   {
+    "n_predict": 320,
+    "n_ctx": 2048,
+    "n_batch": 512,
+    "label": "long"
+   },
+   {
+    "n_predict": 150,
+    "n_ctx": 1024,
+    "n_batch": 64,
+    "label": "medium-smallbatch"
+   },
+   {
+    "n_predict": 640,
+    "n_ctx": 4096,
+    "n_batch": 512,
+    "label": "verylong"
+   },
+   {
+    "n_predict": 320,
+    "n_ctx": 2048,
+    "n_batch": 128,
+    "label": "long-smallbatch"
+   }
+  ],
+  "per_register": 36,
+  "flush_rows": 120000,
+  "device": "cpu",
+  "sampling": "greedy"
+ },
+ "features": {
+  "hidden_tensor": "ffn_inp-<L>",
+  "hidden_dtype": "float16",
+  "expert_tensor": "ffn_moe_topk-<L>",
+  "expert_dtype": "int16",
+  "keys": [
+   "prompt_id",
+   "position",
+   "layer"
+  ],
+  "top_k": 8,
+  "labels": {
+   "lru_miss_66": "uint8, experts of this row missing a 66-slot per-layer LRU",
+   "lru_miss_32": "uint8, the same at 32 slots (higher pressure)",
+   "repeat_hit": "uint8, overlap with the previous token's experts at this layer"
+  }
+ },
+ "totals": {
+  "shards": 52,
+  "rows": 6832244,
+  "bytes": 28196749612,
+  "gb": 28.2,
+  "prompts_captured": 540,
+  "prompts_defined": 616
+ },
+ "splits": {
+  "medical": "test",
+  "reasoning": "test",
+  "history": "test",
+  "environment": "val",
+  "cooking": "val",
+  "legal": "train",
+  "business": "train",
+  "factual": "train",
+  "philosophy": "train",
+  "science": "train",
+  "math": "train",
+  "travel": "train",
+  "creative": "train",
+  "music": "train",
+  "code": "train",
+  "technical": "train"
+ },
+ "split_seed": 20260918,
+ "coverage": {
+  "mean_lru_miss_66": 0.6984548561204781,
+  "mean_lru_miss_32": 1.8087158479703007,
+  "mean_repeat_hit": 3.4428991411899226,
+  "hard_row_pct": 99.28082193785819,
+  "expert_miss_rate_66_pct": 8.730685701505976,
+  "expert_miss_rate_32_pct": 22.60894809962876,
+  "min_expert_count": 236317,
+  "max_expert_count": 622926,
+  "expert_imbalance": 2.6359762522374606,
+  "experts_never_seen": 0,
+  "prompts_by_session": {
+   "short": 90,
+   "medium": 90,
+   "long": 90,
+   "medium-smallbatch": 90,
+   "verylong": 90,
+   "long-smallbatch": 90
+  },
+  "prompts_by_register": {
+   "code": 41,
+   "math": 41,
+   "science": 41,
+   "history": 41,
+   "creative": 41,
+   "factual": 41,
+   "technical": 41,
+   "reasoning": 41,
+   "medical": 36,
+   "legal": 36,
+   "business": 36,
+   "cooking": 36,
+   "travel": 36,
+   "music": 32
+  },
+  "prompts_by_split": {
+   "train": 386,
+   "test": 118,
+   "val": 36
+  }
+ },
+ "shards": [
+  {
+   "file": "shard-0000.npz",
+   "rows": 128876,
+   "bytes": 531872764,
+   "sha256": "b3e8eb3f8a05d9c2b75a1c334325c546c4c997704d16430cc838838f647a3592"
+  },
+  {
+   "file": "shard-0001.npz",
+   "rows": 122071,
+   "bytes": 503788529,
+   "sha256": "327fecdaca1d65e8adb726d28eb85a3f0354ed6f39447499b5e5340a8309f93e"
+  },
+  {
+   "file": "shard-0002.npz",
+   "rows": 120915,
+   "bytes": 499017717,
+   "sha256": "0298a9d1cfeb7014e0d220b69bb2756df719ce21a5cda38a72245d7876c8cf3b"
+  },
+  {
+   "file": "shard-0003.npz",
+   "rows": 120646,
+   "bytes": 497907554,
+   "sha256": "e1014b19f0a867a1da306928df558dbc11b60a2fbc26d404e283c93e023e5fdf"
+  },
+  {
+   "file": "shard-0004.npz",
+   "rows": 147157,
+   "bytes": 607318451,
+   "sha256": "5fecbce8d1532a42588ab10f7fdd8694ebeb992e97c6ec2c4022a5d14091ff0b"
+  },
+  {
+   "file": "shard-0005.npz",
+   "rows": 126408,
+   "bytes": 521687328,
+   "sha256": "314bbd2d596dc76009b7a29bb6cc2809419c07586e02bd90c031decd5688a57d"
+  },
+  {
+   "file": "shard-0006.npz",
+   "rows": 122386,
+   "bytes": 505088534,
+   "sha256": "e966a0e5c759ea96fc4f6d34a68138e8abfc755b37e0f8f9bc3fc454bc1a3d75"
+  },
+  {
+   "file": "shard-0007.npz",
+   "rows": 149875,
+   "bytes": 618535637,
+   "sha256": "24b5ba5647d9773f8004513312aa0ffc189d484fb99604e0cb43009773bf687e"
+  },
+  {
+   "file": "shard-0008.npz",
+   "rows": 126635,
+   "bytes": 522624157,
+   "sha256": "ebd33797298b403a0800d8a35cde9c2c764eb1c23026db0a1468e74070421297"
+  },
+  {
+   "file": "shard-0009.npz",
+   "rows": 123608,
+   "bytes": 510131728,
+   "sha256": "9e7587212a2a890c3d8729c333a7a241d90b9722158a08a502e36f510799a8f6"
+  },
+  {
+   "file": "shard-0010.npz",
+   "rows": 128468,
+   "bytes": 530188948,
+   "sha256": "f983f4443b2fdd3982b3793bd774e8edff811a207719f45ac9361d19bf5fdcb8"
+  },
+  {
+   "file": "shard-0011.npz",
+   "rows": 126399,
+   "bytes": 521650185,
+   "sha256": "33d46398d8ef9075ef0efa3f49d8d1f796bbbe9bd44c6516eb4358a762b33ff7"
+  },
+  {
+   "file": "shard-0012.npz",
+   "rows": 140936,
+   "bytes": 581644384,
+   "sha256": "b36b4a58192c33fa1693e828fec612c8f482a5d34d0346979088fff41683a200"
+  },
+  {
+   "file": "shard-0013.npz",
+   "rows": 145141,
+   "bytes": 598998419,
+   "sha256": "12516622d5fba1233b6d38a3a4f2ccc94a24e3a1c86a00a5527c2e09d62e737e"
+  },
+  {
+   "file": "shard-0014.npz",
+   "rows": 149464,
+   "bytes": 616839440,
+   "sha256": "2fc808dedf58036ace2e70b4f374dd0f1a18ece85b20e8c6b77a35384ee6c3dd"
+  },
+  {
+   "file": "shard-0015.npz",
+   "rows": 126588,
+   "bytes": 522430188,
+   "sha256": "db6cbb81cdd36cd66c5bb6ac26696384254a0bcf36d0c084ee38e3b124425b68"
+  },
+  {
+   "file": "shard-0016.npz",
+   "rows": 134358,
+   "bytes": 554496978,
+   "sha256": "1975a080f6dd751259e0d9f97345ca0f2e0d0b2224c8dee2585ff686ebf79f02"
+  },
+  {
+   "file": "shard-0017.npz",
+   "rows": 138845,
+   "bytes": 573014827,
+   "sha256": "daee452418d799dd886baf3700bba2b4f47eeec0f8be568dd1aed12aa863972f"
+  },
+  {
+   "file": "shard-0018.npz",
+   "rows": 127528,
+   "bytes": 526309568,
+   "sha256": "6d23b3df6b45d24f271862adec14ebf1b6cc84a90c33f67842fd762f4d44414a"
+  },
+  {
+   "file": "shard-0019.npz",
+   "rows": 126012,
+   "bytes": 520053036,
+   "sha256": "b199b7bbaa011dc1e6cbe9ea7a8ba837b6b01ad0d267d03015eb9658ecf998fa"
+  },
+  {
+   "file": "shard-0020.npz",
+   "rows": 150981,
+   "bytes": 623100099,
+   "sha256": "80e43dda21d4404adf0e15327036625dba0742057ba53e12598a0fd2df871039"
+  },
+  {
+   "file": "shard-0021.npz",
+   "rows": 123299,
+   "bytes": 508856485,
+   "sha256": "6159b60cfb4eb8e975674527d6b4dbe3bace51323f8468b0be8a6b07f5dda3e6"
+  },
+  {
+   "file": "shard-0022.npz",
+   "rows": 120575,
+   "bytes": 497614537,
+   "sha256": "b69f9fbd98f9dff6963d326f899322e00eec609be5a8ea636b2561f31916d361"
+  },
+  {
+   "file": "shard-0023.npz",
+   "rows": 125220,
+   "bytes": 516784452,
+   "sha256": "2a4ff9554a56f639d6cd583bff696c7282627de247b99eed1a8136b54a760ea8"
+  },
+  {
+   "file": "shard-0024.npz",
+   "rows": 148350,
+   "bytes": 612241962,
+   "sha256": "b430ac34412353e4c8e5fd4bcc8e11e21f56fc18b737d42b03815e190b25e775"
+  },
+  {
+   "file": "shard-0025.npz",
+   "rows": 123856,
+   "bytes": 511155224,
+   "sha256": "f5ded90c7321d0237bfffa7ca0762a2224757ddba3d0adc6bc4406ed4362c315"
+  },
+  {
+   "file": "shard-0026.npz",
+   "rows": 129418,
+   "bytes": 534109598,
+   "sha256": "35ab0565fcabc9dcc8de4c36e30c25b5916595445634739df438b0d8a5a5c452"
+  },
+  {
+   "file": "shard-0027.npz",
+   "rows": 148961,
+   "bytes": 614763559,
+   "sha256": "1cab26d3cc0444dc68c2e0d58a32cf369c7244035cb951f2af5dfa445478ebdf"
+  },
+  {
+   "file": "shard-0028.npz",
+   "rows": 126917,
+   "bytes": 523787971,
+   "sha256": "218aeaa83bb43db86f75b252467dbbbe0433655268d2aa592f1f368833ecf4ea"
+  },
+  {
+   "file": "shard-0029.npz",
+   "rows": 127663,
+   "bytes": 526866713,
+   "sha256": "d757a48a3e170018b2779ea9d861ccfdc80bd74ac212884542cf1d99eb545347"
+  },
+  {
+   "file": "shard-0030.npz",
+   "rows": 136295,
+   "bytes": 562490977,
+   "sha256": "970f1695160e8815ae9284e003fb67e373c968bc7e601ce833c4b28f43cc3f18"
+  },
+  {
+   "file": "shard-0031.npz",
+   "rows": 124650,
+   "bytes": 514432062,
+   "sha256": "fcac766c62a3b3ce04f84614fdc7f2f29e60e54b5985b769982e71dfa2fd75b9"
+  },
+  {
+   "file": "shard-0032.npz",
+   "rows": 127755,
+   "bytes": 527246397,
+   "sha256": "a5c849b14e583f36a6ed9f0fa3269b271a82a14575c9149aab192eb32b054d25"
+  },
+  {
+   "file": "shard-0033.npz",
+   "rows": 145822,
+   "bytes": 601808906,
+   "sha256": "f000ebcf5a2d7ae458f2d31c61639a541831cbbd0b36abfb1fb2f1b95304ce2f"
+  },
+  {
+   "file": "shard-0034.npz",
+   "rows": 126118,
+   "bytes": 520490498,
+   "sha256": "ca6a7375fd10211f9f83c588a1a65e36d22ef3503ea5c62dc86e1f583350a5fa"
+  },
+  {
+   "file": "shard-0035.npz",
+   "rows": 122653,
+   "bytes": 506190443,
+   "sha256": "7aab8f2ff5313509edb02fb079d2b28e6c68d7126b281155d561ca56c25ada58"
+  },
+  {
+   "file": "shard-0036.npz",
+   "rows": 121423,
+   "bytes": 501114233,
+   "sha256": "59e413e2919d290111c866b17d2c8109e18901520c91b8c00882d92a2c1e6924"
+  },
+  {
+   "file": "shard-0037.npz",
+   "rows": 127602,
+   "bytes": 526614966,
+   "sha256": "e8799e906e3bfd28f6e538f731ef086cce56d4365a38618ede255b9482258673"
+  },
+  {
+   "file": "shard-0038.npz",
+   "rows": 133935,
+   "bytes": 552751257,
+   "sha256": "39e28da135f1f5814f9ffddbf4ea64d3f5457f8ad56bcf8ca442c73f202a90dc"
+  },
+  {
+   "file": "shard-0039.npz",
+   "rows": 121747,
+   "bytes": 502451381,
+   "sha256": "1233e68c9ee8c0008d43370be3bb050b875ea7e25980959a6d3efdcf35c8df51"
+  },
+  {
+   "file": "shard-0040.npz",
+   "rows": 125519,
+   "bytes": 518018425,
+   "sha256": "0ea24ebc9421652b9eeca7ecbca893b65a84c127ee4bc54025296431d61b1e9e"
+  },
+  {
+   "file": "shard-0041.npz",
+   "rows": 126870,
+   "bytes": 523594002,
+   "sha256": "3f8f1073ba889ed8bea1d0bbe8f294d8deef86d1bd4425eb6dce8557aec98c65"
+  },
+  {
+   "file": "shard-0042.npz",
+   "rows": 133669,
+   "bytes": 551653475,
+   "sha256": "8850d171bdea67f1fa7c462b19db579f8d2db72623e63b79450ab0b36ade8a41"
+  },
+  {
+   "file": "shard-0043.npz",
+   "rows": 125460,
+   "bytes": 517774932,
+   "sha256": "ac502293d55a2e7efb22d14d8ad78405c5123b4310e22d7c0185b1a80094e94a"
+  },
+  {
+   "file": "shard-0044.npz",
+   "rows": 121540,
+   "bytes": 501597092,
+   "sha256": "475812ac30011270f87983eef9933b6d4922766f9820fe55a919289c10728c33"
+  },
+  {
+   "file": "shard-0045.npz",
+   "rows": 125742,
+   "bytes": 518938746,
+   "sha256": "b912bcc32075dcc7a90965230cc78fad5c841c0afe9a3399c200fc0bde3da6bd"
+  },
+  {
+   "file": "shard-0046.npz",
+   "rows": 131796,
+   "bytes": 543923604,
+   "sha256": "551f34bd3eafd05d002097ef49cc61d2d7e675f6b04322d14a6a17012e8d404d"
+  },
+  {
+   "file": "shard-0047.npz",
+   "rows": 139261,
+   "bytes": 574731659,
+   "sha256": "74f7655bfccc6cbbff1e99288a84e48b3b6d83c83e91995fc35708e2bc1c17b1"
+  },
+  {
+   "file": "shard-0048.npz",
+   "rows": 150619,
+   "bytes": 621606125,
+   "sha256": "412bfe75c495f4e37c0fce4c9113ccb8f64eb9f667a1924ebf60c6adb877e2a8"
+  },
+  {
+   "file": "shard-0049.npz",
+   "rows": 150541,
+   "bytes": 621284219,
+   "sha256": "dc0f909c9f49a9871b7ec258190bb1954243296ea3518563adfb2b8288a7fd99"
+  },
+  {
+   "file": "shard-0050.npz",
+   "rows": 126253,
+   "bytes": 521047643,
+   "sha256": "635fb7c8133614e2ab160791440b72006745294866ad47a40c0b6c458978bd9d"
+  },
+  {
+   "file": "shard-0051.npz",
+   "rows": 129418,
+   "bytes": 534109598,
+   "sha256": "984a2bb004d5f93af10e2bb2508bfcd89c360f445c5c40fb1e2ddd1698ed9095"
+  }
+ ]
+}
