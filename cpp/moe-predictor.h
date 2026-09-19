@@ -28,9 +28,11 @@
 #include <vector>
 
 enum moe_pred_block {
-    MOE_PRED_BLOCK_PCA  = 0,
-    MOE_PRED_BLOCK_PREV = 1,
-    MOE_PRED_BLOCK_CUR  = 2,
+    MOE_PRED_BLOCK_PCA       = 0,
+    MOE_PRED_BLOCK_PREV      = 1,   // experts layer L+1 used on the previous token
+    MOE_PRED_BLOCK_CUR       = 2,   // experts layer L   used on this token
+    MOE_PRED_BLOCK_BELOW     = 3,   // experts layer L-1 used on this token
+    MOE_PRED_BLOCK_SELF_PREV = 4,   // experts layer L   used on the previous token
 };
 
 struct moe_predictor {
@@ -43,16 +45,19 @@ struct moe_predictor {
     uint32_t n_comp  = 0;
     bool     has_pca = false;
 
-    // where each feature block starts inside x
-    int32_t off_prev = -1;
-    int32_t off_cur  = -1;
-    int32_t off_pca  = -1;
+    // where each feature block starts inside x, -1 when the model does not use it
+    int32_t off_prev      = -1;
+    int32_t off_cur       = -1;
+    int32_t off_below     = -1;
+    int32_t off_self_prev = -1;
+    int32_t off_pca       = -1;
 
     std::vector<float> mean, comp, scale;          // PCA, empty unless has_pca
 
     std::vector<int32_t> layer_of;                 // present layers, ascending
     std::vector<int32_t> index_of;                 // layer -> slot in `w`, or -1
     std::vector<float>   prior;                    // per present layer
+    std::vector<float>   bias;                     // [n_present][n_expert]
     std::vector<float>   w;                        // [n_present][feat_dim*n_expert]
 
     // Load a MOEP file. Returns false and fills `err` on any mismatch; a
@@ -63,8 +68,17 @@ struct moe_predictor {
         return il >= 0 && il < (int) index_of.size() && index_of[il] >= 0;
     }
 
-    // Score layer `il`'s weights into `out` (n_expert floats) from the two
-    // expert-id lists. `prev`/`cur` may be empty.
+    // Score layer `il` into `out` (n_expert floats). Any list may be null/empty;
+    // a block the model does not declare is ignored even if ids are supplied.
+    struct inputs {
+        const int32_t * prev = nullptr;      size_t n_prev = 0;
+        const int32_t * cur  = nullptr;      size_t n_cur = 0;
+        const int32_t * below = nullptr;     size_t n_below = 0;
+        const int32_t * self_prev = nullptr; size_t n_self_prev = 0;
+    };
+    void score(int il, const inputs & in, float * out) const;
+
+    // two-block convenience overload, for v2 models
     void score(int il, const int32_t * prev, size_t n_prev,
                const int32_t * cur, size_t n_cur, float * out) const;
 

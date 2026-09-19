@@ -83,6 +83,44 @@ class Linear(nn.Module):
         return 2 * K * N_EXPERT
 
 
+class LinearCtx(nn.Module):
+    """Per-layer linear, with the two extra context sets the host already has.
+
+    The smoke run said something worth taking seriously: plain per-layer linear
+    beat the shared low-rank model by six points. Expert identity is strongly
+    layer-specific, and factorising across layers throws that away faster than
+    sharing data recovers it.
+
+    So this keeps the per-layer structure and spends the remaining budget on
+    inputs instead of on depth: the experts layer L-1 used this token, and the
+    ones layer L used on the previous token. Two more 8-hot gathers -- 4,096 MAC
+    in total, a fifth of the budget -- and no matrix multiply anywhere.
+    """
+
+    def __init__(self, n_layers, n_expert=N_EXPERT, context=True, **kw):
+        super().__init__()
+        self.n_layers, self.context = n_layers, context
+        names = ["prev", "cur"] + (["below", "self_prev"] if context else [])
+        self.names = names
+        self.tables = nn.ModuleDict(
+            {n: nn.Embedding(n_layers * n_expert, n_expert) for n in names})
+        for t in self.tables.values():
+            nn.init.zeros_(t.weight)
+        self.bias = nn.Parameter(torch.zeros(n_layers, n_expert))
+
+    def forward(self, batch):
+        L = batch["layer"]
+        off = (L * N_EXPERT).unsqueeze(1)
+        s = self.bias[L]
+        for n in self.names:
+            ids = batch[n]
+            s = s + sparse_sum(self.tables[n], torch.where(ids >= 0, ids + off, ids))
+        return s, None
+
+    def macs(self):
+        return len(self.names) * K * N_EXPERT
+
+
 class LowRank(nn.Module):
     """Shared sparse encoder into r dims, then a per-layer r x 128 decoder.
 
@@ -166,7 +204,8 @@ class ResMLP(nn.Module):
                 + self.r * N_EXPERT)
 
 
-ARCHS = {"linear": Linear, "lowrank": LowRank, "resmlp": ResMLP}
+ARCHS = {"linear": Linear, "linearctx": LinearCtx, "lowrank": LowRank,
+         "resmlp": ResMLP}
 
 
 def build(arch, n_layers, **kw):

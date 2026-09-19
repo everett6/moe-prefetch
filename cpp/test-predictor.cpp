@@ -39,21 +39,28 @@ int main(int argc, char ** argv) {
         return 1;
     }
     std::vector<float> s(p.n_expert);
-    std::vector<int32_t> prev, cur, top(8);
+    std::vector<int32_t> ids[4];
+    std::vector<int32_t> top(8);
     for (int32_t c = 0; c < n_cases; ++c) {
-        int32_t il = 0, np = 0, nc = 0;
-        if (fread(&il, 4, 1, fi) != 1 || fread(&np, 4, 1, fi) != 1) return 1;
-        prev.resize(np);
-        if (np && fread(prev.data(), 4, np, fi) != (size_t) np) return 1;
-        if (fread(&nc, 4, 1, fi) != 1) return 1;
-        cur.resize(nc);
-        if (nc && fread(cur.data(), 4, nc, fi) != (size_t) nc) return 1;
-
+        int32_t il = 0;
+        if (fread(&il, 4, 1, fi) != 1) return 1;
+        // four id lists, in the fixed order prev, cur, below, self_prev
+        for (int b = 0; b < 4; ++b) {
+            int32_t n = 0;
+            if (fread(&n, 4, 1, fi) != 1) return 1;
+            ids[b].resize(n);
+            if (n && fread(ids[b].data(), 4, n, fi) != (size_t) n) return 1;
+        }
         if (!p.has_layer(il)) {
             fprintf(stderr, "case %d: layer %d absent\n", c, il);
             return 1;
         }
-        p.score(il, prev.data(), np, cur.data(), nc, s.data());
+        moe_predictor::inputs in;
+        in.prev      = ids[0].data(); in.n_prev      = ids[0].size();
+        in.cur       = ids[1].data(); in.n_cur       = ids[1].size();
+        in.below     = ids[2].data(); in.n_below     = ids[2].size();
+        in.self_prev = ids[3].data(); in.n_self_prev = ids[3].size();
+        p.score(il, in, s.data());
         fwrite(s.data(), 4, p.n_expert, fo);
         p.top_k_ids(s.data(), 8, top.data());
         fwrite(top.data(), 4, 8, fo);

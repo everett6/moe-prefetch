@@ -51,9 +51,11 @@ LAMBDAS = [1.0, 10.0, 100.0, 1000.0, 10000.0]
 N_EXPERT, K = 128, 8
 
 MAGIC = b"MOEP"
-VERSION = 2
-BLOCK_PCA, BLOCK_PREV, BLOCK_CUR = 0, 1, 2
-BLOCK_NAME = {BLOCK_PCA: "pca_h_norm", BLOCK_PREV: "prev_experts_L+1", BLOCK_CUR: "cur_experts_L"}
+VERSION = 3
+BLOCK_PCA, BLOCK_PREV, BLOCK_CUR, BLOCK_BELOW, BLOCK_SELF_PREV = 0, 1, 2, 3, 4
+BLOCK_NAME = {BLOCK_PCA: "pca_h_norm", BLOCK_PREV: "prev_experts_L+1",
+              BLOCK_CUR: "cur_experts_L", BLOCK_BELOW: "below_experts_L-1",
+              BLOCK_SELF_PREV: "self_prev_experts_L"}
 
 
 PRIOR_WEIGHTS = [0.0, 0.25, 0.5, 1.0, 2.0, 4.0]
@@ -246,6 +248,13 @@ def main():
 # ---------------------------------------------------------------------------
 
 def write_binary(path, f, mean, comp, scale, n_layers, d_model):
+    """v3 adds two host-free feature blocks and a per-layer bias.
+
+    The bias exists because the fresh model is trained by SGD rather than solved
+    in closed form, and an unbiased linear map is a real handicap when the target
+    is 8 ones in 128 zeros -- the ridge solution absorbed that into its intercept
+    implicitly, an SGD model has to be given somewhere to put it.
+    """
     blocks = f["blocks"]
     has_pca = BLOCK_PCA in blocks
     layers = sorted(f["W"])
@@ -270,6 +279,10 @@ def write_binary(path, f, mean, comp, scale, n_layers, d_model):
             fh.write(np.ascontiguousarray(scale, dtype="<f4").tobytes())
         fh.write(np.asarray(layers, dtype="<i4").tobytes())
         fh.write(np.asarray([f["prior"][L] for L in layers], dtype="<f4").tobytes())
+        bias = f.get("bias")
+        for L in layers:
+            fh.write(np.ascontiguousarray(
+                bias[L] if bias is not None else np.zeros(N_EXPERT), dtype="<f4").tobytes())
         for L in layers:
             fh.write(np.ascontiguousarray(f["W"][L], dtype="<f4").tobytes())
 
@@ -279,7 +292,7 @@ def read_binary(path):
         assert fh.read(4) == MAGIC, "not a MOEP file"
         (ver, d_model, n_comp, n_expert, n_layers, k, feat_dim,
          n_present, n_blocks, has_pca, _) = struct.unpack("<11I", fh.read(44))
-        assert ver == VERSION
+        assert ver == VERSION, f"format v{ver}, expected v{VERSION}"
         table = [struct.unpack("<3I", fh.read(12)) for _ in range(n_blocks)]
         out = {"feat_dim": feat_dim, "blocks": [b for b, _, _ in table],
                "table": table, "n_expert": n_expert, "k": k}
@@ -291,6 +304,8 @@ def read_binary(path):
         layers = np.frombuffer(fh.read(4 * n_present), dtype="<i4")
         priors = np.frombuffer(fh.read(4 * n_present), dtype="<f4")
         out["prior"] = {int(L): float(w) for L, w in zip(layers, priors)}
+        out["bias"] = {int(L): np.frombuffer(fh.read(4 * n_expert), dtype="<f4")
+                       for L in layers}
         out["W"] = {int(L): np.frombuffer(fh.read(4 * feat_dim * n_expert),
                                           dtype="<f4").reshape(feat_dim, n_expert)
                     for L in layers}

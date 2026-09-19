@@ -41,8 +41,8 @@ bool moe_predictor::load(const std::string & path, std::string & err) {
         fclose(f);
         return false;
     }
-    if (ver != 2) {
-        err = path + ": version " + std::to_string(ver) + ", expected 2";
+    if (ver != 3) {
+        err = path + ": version " + std::to_string(ver) + ", expected 3";
         fclose(f);
         return false;
     }
@@ -80,6 +80,14 @@ bool moe_predictor::load(const std::string & path, std::string & err) {
                 off_cur = (int32_t) off;
                 if (size != n_expert) { err = path + ": cur block size != n_expert"; fclose(f); return false; }
                 break;
+            case MOE_PRED_BLOCK_BELOW:
+                off_below = (int32_t) off;
+                if (size != n_expert) { err = path + ": below block size != n_expert"; fclose(f); return false; }
+                break;
+            case MOE_PRED_BLOCK_SELF_PREV:
+                off_self_prev = (int32_t) off;
+                if (size != n_expert) { err = path + ": self_prev block size != n_expert"; fclose(f); return false; }
+                break;
             default:
                 err = path + ": unknown feature block kind " + std::to_string(kind);
                 fclose(f);
@@ -112,7 +120,9 @@ bool moe_predictor::load(const std::string & path, std::string & err) {
 
     layer_of.resize(n_present);
     prior.resize(n_present);
-    if (!rd(f, layer_of.data(), n_present*4) || !rd(f, prior.data(), n_present*4)) {
+    bias.resize((size_t) n_present*n_expert);
+    if (!rd(f, layer_of.data(), n_present*4) || !rd(f, prior.data(), n_present*4) ||
+        !rd(f, bias.data(), bias.size()*4)) {
         err = path + ": truncated layer table";
         fclose(f);
         return false;
@@ -146,11 +156,22 @@ bool moe_predictor::load(const std::string & path, std::string & err) {
 
 void moe_predictor::score(int il, const int32_t * prev, size_t n_prev,
                           const int32_t * cur, size_t n_cur, float * out) const {
+    inputs in;
+    in.prev = prev; in.n_prev = n_prev;
+    in.cur  = cur;  in.n_cur  = n_cur;
+    score(il, in, out);
+}
+
+void moe_predictor::score(int il, const inputs & in, float * out) const {
     const int32_t slot = index_of[il];
     const float * W = w.data() + (size_t) slot*feat_dim*n_expert;
     const uint32_t E = n_expert;
 
-    std::fill(out, out + E, 0.0f);
+    // start from the layer's bias rather than zero: the fresh model is trained
+    // by SGD and needs an intercept, where the ridge solution absorbed one
+    // implicitly
+    const float * b = bias.data() + (size_t) slot*E;
+    std::copy(b, b + E, out);
 
     // x is multi-hot, so x . W is a sum of the rows x selects. 16 rows of 128
     // floats: no multiplies, and it vectorises.
@@ -169,8 +190,10 @@ void moe_predictor::score(int il, const int32_t * prev, size_t n_prev,
             }
         }
     };
-    add_rows(prev, n_prev, off_prev);
-    add_rows(cur,  n_cur,  off_cur);
+    add_rows(in.prev,      in.n_prev,      off_prev);
+    add_rows(in.cur,       in.n_cur,       off_cur);
+    add_rows(in.below,     in.n_below,     off_below);
+    add_rows(in.self_prev, in.n_self_prev, off_self_prev);
 
     // z-score, then the repeat prior -- in that order, which is how the weight
     // was chosen at fit time. Swapping them changes what the weight means.
@@ -191,8 +214,8 @@ void moe_predictor::score(int il, const int32_t * prev, size_t n_prev,
 
     const float pw = prior[slot];
     if (pw != 0.0f) {
-        for (size_t i = 0; i < n_prev; ++i) {
-            const int32_t e = prev[i];
+        for (size_t i = 0; i < in.n_prev; ++i) {
+            const int32_t e = in.prev[i];
             if (e >= 0 && e < (int32_t) E) {
                 out[e] += pw;
             }

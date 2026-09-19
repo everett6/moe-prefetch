@@ -247,8 +247,14 @@ def main():
     E = args.epochs
     if args.configs == "sweep":
         configs = [
-            {"name": "linear",        "arch": "linear",  "lr": 3e-2, "epochs": E, "loss": "bce"},
-            {"name": "linear-mse",    "arch": "linear",  "lr": 3e-2, "epochs": E, "loss": "mse"},
+            {"name": "linear",         "arch": "linear",    "lr": 3e-2, "epochs": E},
+            {"name": "linear-mse",     "arch": "linear",    "lr": 3e-2, "epochs": E, "loss": "mse"},
+            {"name": "linearctx",      "arch": "linearctx", "lr": 3e-2, "epochs": E},
+            {"name": "linearctx-lr1e2", "arch": "linearctx", "lr": 1e-2, "epochs": E},
+            {"name": "linearctx-listnet", "arch": "linearctx", "lr": 3e-2, "epochs": E,
+             "loss": "listnet"},
+            {"name": "linearctx-noctx", "arch": "linearctx", "lr": 3e-2, "epochs": E,
+             "context": False},
             {"name": "lowrank-r32",   "arch": "lowrank", "lr": 3e-3, "epochs": E, "r": 32},
             {"name": "lowrank-r64",   "arch": "lowrank", "lr": 3e-3, "epochs": E, "r": 64},
             {"name": "lowrank-r96",   "arch": "lowrank", "lr": 3e-3, "epochs": E, "r": 96},
