@@ -2,54 +2,54 @@
  "break_even": 0.751157024907436,
  "by_depth": {
   "1": {
-   "issued": 43505,
-   "correct": 25926,
-   "precision": 0.5959315021261924,
-   "warm_issued": 37890,
-   "warm_correct": 20910,
-   "warm_precision": 0.5518606492478226
+   "issued": 67102,
+   "correct": 35658,
+   "precision": 0.5313999582724807,
+   "warm_issued": 61294,
+   "warm_correct": 30685,
+   "warm_precision": 0.5006199628022319
   },
   "2": {
-   "issued": 64454,
-   "correct": 42457,
-   "precision": 0.6587178452850094,
-   "warm_issued": 53749,
-   "warm_correct": 32813,
-   "warm_precision": 0.6104857764795624
+   "issued": 94295,
+   "correct": 50745,
+   "precision": 0.5381515456811071,
+   "warm_issued": 83280,
+   "warm_correct": 41309,
+   "warm_precision": 0.4960254562920269
   },
   "3": {
-   "issued": 79670,
-   "correct": 55821,
-   "precision": 0.7006526923559684,
-   "warm_issued": 64166,
-   "warm_correct": 41842,
-   "warm_precision": 0.6520898918430321
+   "issued": 107382,
+   "correct": 58706,
+   "precision": 0.5467024268499376,
+   "warm_issued": 91550,
+   "warm_correct": 45141,
+   "warm_precision": 0.49307482250136536
   },
   "4": {
-   "issued": 92380,
-   "correct": 67404,
-   "precision": 0.7296384498809266,
-   "warm_issued": 72230,
-   "warm_correct": 49315,
-   "warm_precision": 0.6827495500484563
+   "issued": 115031,
+   "correct": 63940,
+   "precision": 0.5558501621302083,
+   "warm_issued": 94644,
+   "warm_correct": 46573,
+   "warm_precision": 0.49208613329952244
   },
   "6": {
-   "issued": 111293,
-   "correct": 83800,
-   "precision": 0.7529673923786762,
-   "warm_issued": 82165,
-   "warm_correct": 58576,
-   "warm_precision": 0.7129069555163391
+   "issued": 125044,
+   "correct": 71096,
+   "precision": 0.5685678641118327,
+   "warm_issued": 96084,
+   "warm_correct": 47230,
+   "warm_precision": 0.49154906123808334
   },
   "8": {
-   "issued": 122168,
-   "correct": 90821,
-   "precision": 0.7434107131163643,
-   "warm_issued": 84352,
-   "warm_correct": 60564,
-   "warm_precision": 0.7179912746585736
+   "issued": 133280,
+   "correct": 75719,
+   "precision": 0.5681197478991596,
+   "warm_issued": 96175,
+   "warm_correct": 47276,
+   "warm_precision": 0.4915622563036132
   }
  },
- "ckpt": "FRESH_SUPERVISED-linearctx-lr1e2.pt",
+ "ckpt": "FRESH_REAL_DECODE-linearctx-lr1e2.pt",
  "split": "test"
 }

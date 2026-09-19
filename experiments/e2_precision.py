@@ -97,9 +97,20 @@ def main():
     ap.add_argument("--index", default=os.path.join(ROOT, "data", "index-v3.npz"))
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--split", default="val")
+    ap.add_argument("--decode-only", action="store_true",
+                    help="score decode rows only. Prefill uses all 128 experts "
+                         "per layer at any batch of 32+, so a prefetcher there "
+                         "has nothing to choose between and its 'precision' is "
+                         "not a meaningful number.")
+    ap.add_argument("--corpus", default=os.path.join(ROOT, "data", "corpus-v4"))
     args = ap.parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ix = Index(args.index)
+    if args.decode_only:
+        sys.path.insert(0, HERE)
+        from r5b_phase import phase_mask, Subset
+        ix = Subset(ix, phase_mask(ix, args.corpus))
+        print(f"decode-only: {ix.n:,} pairs")
     ck = torch.load(args.ckpt, map_location=device, weights_only=False)
     model = M.build(ck["cfg"]["arch"], ix.n_layers, r=ck["cfg"].get("r", 64),
                     hidden=ck["cfg"].get("hidden", 128),

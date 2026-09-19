@@ -27,7 +27,7 @@ MODEL = os.environ.get("MODEL", os.path.join(ROOT, "models", "predictor-fresh.bi
 CKPT = os.environ.get("CKPT", os.path.join(ROOT, "artifacts", "ckpt",
                                            "FRESH_SUPERVISED-linearctx-lr1e2.pt"))
 BIN = os.path.join(HERE, "build", "test-predictor")
-INDEX = os.path.join(ROOT, "data", "index-v3.npz")
+INDEX = os.environ.get("INDEX", os.path.join(ROOT, "data", "index-v4.npz"))
 ORDER = ["prev", "cur", "below", "self_prev"]
 TOL = 2e-4
 
