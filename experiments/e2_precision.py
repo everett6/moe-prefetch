@@ -40,7 +40,15 @@ def evaluate_precision(model, ix, split_id, device, depths=(1, 2, 3, 4, 6, 8),
     order = np.lexsort((d["layer"][rows], d["pos"][rows], d["prompt"][rows]))
     rows = rows[order]
     env = PrefetchEnv(capacity=capacity, n_layers=ix.n_layers)
+    # Split by cache warmth. Precision that rises with depth is a warning sign:
+    # it means the deeper candidates are more often right, which happens when
+    # rows with MANY non-resident candidates (a cold cache, where all 8 of the
+    # model's picks survive the filter and ~74% of them are correct) dominate the
+    # pooled average. Those rows are not the regime the engine runs in -- in
+    # steady state only one or two experts per layer are non-resident, and those
+    # are precisely the novel ones that are hardest to predict.
     stats = {p: {"issued": 0, "correct": 0} for p in depths}
+    warm = {p: {"issued": 0, "correct": 0} for p in depths}
     tok_seen, last = 0, None
     with torch.no_grad():
         for s in range(0, len(rows), 16384):
@@ -56,23 +64,30 @@ def evaluate_precision(model, ix, split_id, device, depths=(1, 2, 3, 4, 6, 8),
                         env.step_boundary()
                         tok_seen += 1
                         if tok_seen >= max_tokens:
-                            return _finish(stats, env)
+                            return _finish(stats, warm)
                     last = key
                 truth = set(int(e) for e in d["target"][r] if e >= 0)
                 cand = [int(e) for e in top[n] if e not in env.resident[nxt]]
+                is_warm = len(env.resident[nxt]) >= 0.9 * capacity
                 for p in depths:
                     take = cand[:p]
+                    n_ok = sum(1 for e in take if e in truth)
                     stats[p]["issued"] += len(take)
-                    stats[p]["correct"] += sum(1 for e in take if e in truth)
+                    stats[p]["correct"] += n_ok
+                    if is_warm:
+                        warm[p]["issued"] += len(take)
+                        warm[p]["correct"] += n_ok
                 cur = [int(e) for e in d["cur"][r] if e >= 0]
                 env.observe(L, cur)
                 env.admit_demand(L, cur)
-    return _finish(stats, env)
+    return _finish(stats, warm)
 
 
-def _finish(stats, env):
+def _finish(stats, warm):
     return {p: {"issued": v["issued"], "correct": v["correct"],
-                "precision": v["correct"] / max(v["issued"], 1)}
+                "precision": v["correct"] / max(v["issued"], 1),
+                "warm_issued": warm[p]["issued"], "warm_correct": warm[p]["correct"],
+                "warm_precision": warm[p]["correct"] / max(warm[p]["issued"], 1)}
             for p, v in stats.items()}
 
 
@@ -97,15 +112,21 @@ def main():
 
     print(f"\n=== E2: PRECISION ON NON-RESIDENT EXPERTS ({args.split}) ===\n")
     print(f"break-even precision = C/(B+C) = {100 * bar:.0f}%\n")
-    print("%7s %12s %12s %12s %10s" % ("depth", "issued", "correct", "precision", "verdict"))
+    print("%7s %12s %11s %14s %11s %9s" % ("depth", "issued", "precision",
+                                            "warm issued", "warm prec", "verdict"))
     for p in sorted(res):
         v = res[p]
-        print("%7d %12s %12s %11.1f%% %10s" % (
-            p, f"{v['issued']:,}", f"{v['correct']:,}", 100 * v["precision"],
-            "PAYS" if v["precision"] >= bar else "loses"))
+        print("%7d %12s %10.1f%% %14s %10.1f%% %9s" % (
+            p, f"{v['issued']:,}", 100 * v["precision"], f"{v['warm_issued']:,}",
+            100 * v["warm_precision"],
+            "PAYS" if v["warm_precision"] >= bar else "loses"))
     best = max(res, key=lambda p: res[p]["precision"])
-    print(f"\nBest precision {100 * res[best]['precision']:.1f}% at depth {best}, "
+    bw = max(res, key=lambda p: res[p]["warm_precision"])
+    print(f"\nPooled best {100 * res[best]['precision']:.1f}% at depth {best}; "
+          f"warm-cache best {100 * res[bw]['warm_precision']:.1f}% at depth {bw}, "
           f"against a {100 * bar:.0f}% bar.")
+    print("The warm column is the one that matters: it is the steady state the "
+          "engine\nspends almost all of its time in.")
     json.dump({"break_even": bar, "by_depth": {str(k): v for k, v in res.items()},
                "ckpt": os.path.basename(args.ckpt), "split": args.split},
               open(os.path.join(ROOT, "artifacts", f"precision_{args.split}.json"), "w"),

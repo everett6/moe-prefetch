@@ -111,13 +111,16 @@ def main():
     arms["FRESH_SUPERVISED"] = load_fresh(args.fresh, ix.n_layers, device)
 
     out = {"split": args.split, "break_even_precision": bar, "arms": {}}
-    print(f"\n=== THREE-WAY COMPARISON ({args.split} registers: "
-          f"{[r for r in ix.registers]}) ===\n")
-    print("%-18s %9s %11s %12s %11s %9s" % ("arm", "recall@8", "hard@8",
-                                            "precision@2", "params", "us/call"))
+    test_regs = sorted({ix.registers[int(r)] for r in ix.d["reg"][rows]})
+    print(f"\n=== THREE-WAY COMPARISON ({args.split} registers: {test_regs}) ===\n")
+    print("%-18s %9s %11s %13s %13s %10s" % ("arm", "recall@8", "hard@8",
+                                             "warm prec@2", "warm prec@8", "params"))
     for name, (model, ck) in arms.items():
         ev = evaluate(model, ix, rows, device, ks=(4, 8, 12), breakdown=True)
-        pr = evaluate_precision(model, ix, sid, device, depths=(1, 2, 3, 4))
+        # identical configuration to e2_precision.py -- passing a shorter depth
+        # list truncates the candidate pool to the top-4 and inflates precision,
+        # which reported 92% against the 66% the same model actually achieves
+        pr = evaluate_precision(model, ix, sid, device, depths=(1, 2, 3, 4, 6, 8))
         lat = measure_latency(model, ix, device)
         n_par = sum(p.numel() for p in model.parameters()) + sum(
             b.numel() for b in model.buffers())
@@ -126,15 +129,18 @@ def main():
                              "macs": model.macs(),
                              "arch": (ck["cfg"]["arch"] if ck else "ridge-perlayer"),
                              "hyperparams": (ck["cfg"] if ck else {})}
-        print("%-18s %8.2f%% %10.2f%% %11.1f%% %11s %8.1f"
+        print("%-18s %8.2f%% %10.2f%% %12.1f%% %12.1f%% %10s"
               % (name, 100 * ev["recall@8"], 100 * ev["recall@8_hard"],
-                 100 * pr[2]["precision"], f"{n_par:,}", lat))
+                 100 * pr[2]["warm_precision"], 100 * pr[8]["warm_precision"],
+                 f"{n_par:,}"))
 
     print(f"\nbreak-even precision {100 * bar:.0f}%")
     for name, a in out["arms"].items():
-        p2 = a["precision"]["2"]["precision"]
-        print(f"  {name:<18} precision@2 {100 * p2:.1f}%  -> "
-              f"{'PAYS' if p2 >= bar else 'prefetch does not pay; depth 0 is optimal'}")
+        best = max(a["precision"].values(), key=lambda v: v["warm_precision"])
+        p2 = a["precision"]["2"]["warm_precision"]
+        print(f"  {name:<18} warm precision {100 * p2:.1f}% at depth 2, "
+              f"best {100 * best['warm_precision']:.1f}%  -> "
+              f"{'PAYS' if best['warm_precision'] >= bar else 'does not pay; depth 0 is optimal'}")
 
     json.dump(out, open(os.path.join(ROOT, "artifacts", f"final_eval_{args.split}.json"), "w"),
               indent=1, default=float)

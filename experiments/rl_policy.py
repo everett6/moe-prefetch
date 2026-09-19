@@ -122,8 +122,24 @@ def rank_all(model, ix, rows, device, topn=8):
     return ids, sc, pos
 
 
+def build_next_use(ix, rows):
+    """(prompt, position, layer) -> experts that layer routes to on the NEXT token.
+
+    A prefetch issued at layer L is published at the step boundary, so the expert
+    is resident from the next token onward -- never for the token that triggered
+    it. Crediting it against this token's routing, which an earlier version did,
+    rewards a prediction the cache could not have used and put the reward column
+    in direct contradiction with the throughput column.
+    """
+    d = ix.d
+    cur_at = {}
+    for r in rows:
+        cur_at[(int(d["prompt"][r]), int(d["pos"][r]), int(d["layer"][r]))] = d["cur"][r]
+    return cur_at
+
+
 def run_episodes(tokens, ix, ranked, policy, env_kw, cost, device, train=False,
-                 fixed=None, opt=None, gamma=0.99):
+                 fixed=None, opt=None, gamma=0.99, next_use=None):
     """Replay tokens through the engine, choosing prefetch depth at each layer."""
     ids_arr, sc_arr, pos = ranked
     env = PrefetchEnv(cost=cost, **env_kw)
@@ -154,11 +170,18 @@ def run_episodes(tokens, ix, ranked, policy, env_kw, cost, device, train=False,
                 a_t = dist.sample() if train else logits.argmax()
                 lp = dist.log_prob(a_t)
                 a = ACTIONS[int(a_t)]
-            issued = env.prefetch(nxt, [e for e in cand if e not in env.resident[nxt]], a)
+            issued = env.prefetch(nxt, [e for e in cand if e not in env.resident[nxt]], a,
+                                  min_keep=env.max_inserts)
             # A correct prefetch converts a miss and adds no upload (the demand
             # path would have fetched that expert anyway). An incorrect one is a
             # wasted upload. See prefetch_env's docstring for the accounting.
-            truth = set(int(e) for e in d["target"][r] if e >= 0)
+            # what the prefetch can actually be used for: layer L+1's routing on
+            # the NEXT token, since that is when the upload is published
+            nxt_ids = None
+            if next_use is not None:
+                nxt_ids = next_use.get((int(d["prompt"][r]), int(d["pos"][r]) + 1, nxt))
+            truth = (set(int(e) for e in nxt_ids if e >= 0) if nxt_ids is not None
+                     else set(int(e) for e in d["target"][r] if e >= 0))
             n_correct = sum(1 for e in issued if e in truth)
             rew = env.reward(n_correct, len(issued) - n_correct)
             rewards.append(rew)
@@ -167,8 +190,9 @@ def run_episodes(tokens, ix, ranked, policy, env_kw, cost, device, train=False,
                 logps.append(lp)
                 values.append(v)
             # the layer itself runs
-            env.observe(L, [int(e) for e in d["cur"][r] if e >= 0])
-            env.admit_demand(L, [int(e) for e in d["cur"][r] if e >= 0])
+            cur = [int(e) for e in d["cur"][r] if e >= 0]
+            env.observe(L, cur)
+            env.admit_demand(L, cur)
         env.step_boundary()
         n_tok += 1
 
@@ -210,18 +234,24 @@ def main():
     model.eval()
     cost = fit_cost_model()
     env_kw = {"capacity": 66, "max_inserts": 2, "pool_extra": 3, "n_layers": ix.n_layers}
+    # NOTE: this environment is for RANKING policies. Its absolute throughput is
+    # optimistic -- it issues 15.5 uploads a token where the engine measures 23.6
+    # -- so authoritative tok/s comes from experiments/e4_config_sweep.sh.
+
 
     train_toks = episode_tokens(ix, 0, args.tokens)
     val_toks = episode_tokens(ix, 1, args.tokens)
     rows_all = np.unique(np.concatenate([np.asarray(t) for t in train_toks + val_toks]))
     ranked = rank_all(model, ix, rows_all, device)
+    next_use = build_next_use(ix, np.concatenate([ix.rows(0), ix.rows(1), ix.rows(2)]))
     print(f"{len(train_toks)} train tokens, {len(val_toks)} val tokens", file=sys.stderr)
 
     # --- controls: fixed prefetch depth
     print("\n=== fixed-depth controls (validation) ===\n", file=sys.stderr)
     base = {}
     for a in ACTIONS:
-        r = run_episodes(val_toks, ix, ranked, None, env_kw, cost, device, fixed=a)
+        r = run_episodes(val_toks, ix, ranked, None, env_kw, cost, device, fixed=a,
+                         next_use=next_use)
         base[a] = r
         print(f"  depth {a}: {r['tok_s']:6.1f} tok/s  hit {100 * r['hit']:.1f}%  "
               f"{r['uploads_per_token']:.1f} up/tok  reward {r['reward']:+.3f} ms/tok",
@@ -234,8 +264,9 @@ def main():
     hist = []
     for ep in range(args.episodes):
         run_episodes(train_toks, ix, ranked, policy, env_kw, cost, device,
-                     train=True, opt=opt)
-        v = run_episodes(val_toks, ix, ranked, policy, env_kw, cost, device)
+                     train=True, opt=opt, next_use=next_use)
+        v = run_episodes(val_toks, ix, ranked, policy, env_kw, cost, device,
+                         next_use=next_use)
         hist.append(v["tok_s"])
         if v["reward"] > best:
             best = v["reward"]
@@ -245,7 +276,8 @@ def main():
                   f"reward {v['reward']:+.3f}  {v['uploads_per_token']:.2f} up/tok",
                   file=sys.stderr, flush=True)
     policy.load_state_dict(best_state)
-    final = run_episodes(val_toks, ix, ranked, policy, env_kw, cost, device)
+    final = run_episodes(val_toks, ix, ranked, policy, env_kw, cost, device,
+                         next_use=next_use)
 
     # --- the informative part: sweep the upload cost
     print("\n=== break-even: how cheap must an upload be for prefetch to pay? ===\n",
@@ -255,9 +287,9 @@ def main():
     for scale in (1.0, 0.5, 0.25, 0.1, 0.05, 0.0):
         c2 = dict(cost)
         c2["C_ms_per_upload"] = C0 * scale
-        rows = {a: run_episodes(val_toks, ix, ranked, None, env_kw, c2, device, fixed=a)
-                for a in ACTIONS}
-        rl = run_episodes(val_toks, ix, ranked, policy, env_kw, c2, device)
+        rows = {a: run_episodes(val_toks, ix, ranked, None, env_kw, c2, device, fixed=a,
+                                next_use=next_use) for a in ACTIONS}
+        rl = run_episodes(val_toks, ix, ranked, policy, env_kw, c2, device, next_use=next_use)
         bestfixed = max(rows, key=lambda a: rows[a]["tok_s"])
         sweep.append({"upload_cost_us": 1000 * C0 * scale, "scale": scale,
                       "best_fixed_depth": bestfixed,
@@ -276,9 +308,11 @@ def main():
         rows_t = np.unique(np.concatenate([np.asarray(t) for t in test_toks]))
         ranked_t = rank_all(model, ix, rows_t, device)
         out["test"] = {
-            "rl": run_episodes(test_toks, ix, ranked_t, policy, env_kw, cost, device),
+            "rl": run_episodes(test_toks, ix, ranked_t, policy, env_kw, cost, device,
+                               next_use=next_use),
             "fixed": {str(a): run_episodes(test_toks, ix, ranked_t, None, env_kw, cost,
-                                           device, fixed=a) for a in ACTIONS}}
+                                           device, fixed=a, next_use=next_use)
+                      for a in ACTIONS}}
     os.makedirs(ARTIFACTS, exist_ok=True)
     json.dump(out, open(os.path.join(ARTIFACTS, "stage_d_rl.json"), "w"), indent=1, default=float)
     torch.save({"state": policy.state_dict(), "tag": "FRESH_RL"},

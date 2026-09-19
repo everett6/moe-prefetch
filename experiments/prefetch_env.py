@@ -138,14 +138,28 @@ class PrefetchEnv:
                 miss += 1
         return miss
 
-    def admit_demand(self, layer, ids):
-        """A miss is computed on the CPU and then becomes resident, exactly as the
-        engine's LRU does. Costs no prefetch budget."""
-        for e in ids:
-            if e not in self.resident[layer]:
-                self._install(layer, e)
+    def admit_demand(self, layer, ids, budget=None):
+        """A miss is computed on the CPU. It becomes resident only if an upload is
+        issued for it AND published, and the engine issues at most `max_inserts`
+        per layer per step out of the same pre-freed pool a prefetch draws from.
+
+        An earlier version installed every miss immediately. That made the model
+        admit 54.5 experts a token where the engine measures 23.6, and put depth-0
+        throughput at 69 tok/s against a system that runs at 104 -- the simulator
+        was paying for uploads the engine never performs.
+        """
+        if budget is None:
+            budget = self.max_inserts
+        return self.prefetch(layer, [e for e in ids if e not in self.resident[layer]],
+                             budget)
 
     def _install(self, layer, e):
+        # Every install is a real upload -- a demand admission copies the expert
+        # to VRAM exactly as a prefetch does. Counting only speculative ones made
+        # depth 0 look like 147 tok/s against a system that measures 104, because
+        # the ~24 demand uploads a token actually performs were free in the model
+        # and charged in reality.
+        self.stats["uploads"] += 1
         if len(self.resident[layer]) >= self.capacity:
             victim = min(self.recency[layer], key=self.recency[layer].get)
             self.resident[layer].discard(victim)
@@ -154,18 +168,21 @@ class PrefetchEnv:
         self.clock += 1
         self.recency[layer][e] = self.clock
 
-    def prefetch(self, layer, ids, budget):
-        """Issue up to `budget` uploads for `layer`. Returns those actually issued."""
+    def prefetch(self, layer, ids, budget, min_keep=0):
+        """Issue up to `budget` uploads for `layer`. Returns those actually issued.
+
+        `min_keep` reserves pool slots for the demand path, which has ground truth
+        where a prefetch has a guess. Without it the predictor drains the pool one
+        layer ahead and the demand path finds it empty."""
         issued = []
         for e in ids:
-            if len(issued) >= budget or self.free[layer] <= 0:
+            if len(issued) >= budget or self.free[layer] <= min_keep:
                 break
             if e in self.resident[layer] or e in self.inflight[layer]:
                 continue
             self.inflight[layer][e] = True
             self.free[layer] -= 1
-            issued.append(e)
-            self.stats["uploads"] += 1
+            issued.append(e)          # counted when it installs, not when issued
         return issued
 
     def step_boundary(self):
