@@ -1,0 +1,9 @@
+{
+ "same_layer_prev_token": 0.4583761213408876,
+ "cross_layer_same_token": 0.06450017997120461,
+ "random": 0.062453277463015426,
+ "cross_layer_best": {
+  "layer": 16,
+  "recall": 0.09140037593984962
+ }
+}

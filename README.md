@@ -55,7 +55,53 @@ The honest reading recorded there: *"the exploitable structure is almost entirel
 'experts recur as themselves across adjacent tokens' — not richer cross-expert
 transition patterns."*
 
-## Why this project expects to beat 47.8% anyway
+## Correction (measured 2026-09-18): the mechanism below does not work
+
+**The token-predictor design described in the next section has a dependency flaw,
+and the cross-layer alternative has no signal. Both are recorded here rather than
+quietly deleted, because the measurement is the useful part.**
+
+A layer's router takes *that layer's* hidden state `h_L(t)`. To know which experts
+token t+1 needs at layer L you need `h_L(t+1)` — which requires having already run
+layers 0..L-1 on token t+1. Knowing the token's *identity* early does not give you
+its hidden states. So "predict the token, then ask the real router" cannot run
+ahead of the computation it is supposed to prefetch for. The idea was sound about
+*why* the AI2 predictors failed and wrong about what to do instead.
+
+The standard fix in the literature (Pre-gated MoE, FATE) is to predict **across
+layers within a token**: while layer L computes, predict what layer L+1 will
+select. That direction genuinely has lookahead. `experiments/m1_prediction_signals.py`
+measured whether it has any *information*, on AI2's 255,360-row Q4_K_M trace:
+
+| signal | recall@8 | can it prefetch? |
+|---|---|---|
+| same-layer, previous token (`naive-repeat`) | **45.8%** | **no** — needs `h_L(t+1)` |
+| cross-layer, same token | **6.5%** | yes — `h_L` is in hand one layer early |
+| random (8 of 128) | 6.2% | — |
+
+**The signal with lookahead carries essentially no information** (6.5% against a
+6.2% floor; the best layer pair, 16→17, reaches only 9.1%). Expert selections at
+adjacent layers of the same token are very nearly independent.
+
+So: the informative signal cannot prefetch, and the prefetchable signal is not
+informative. That is a real obstacle, not a tuning problem.
+
+**What this does *not* rule out:** the test predicts expert IDs *from expert IDs*.
+Pre-gated MoE predicts `E_{L+1}` from the hidden state `h_L`, which carries far
+more information than 8 integers — at the cost of modifying the model so the
+gate emits next-layer routing, and retraining it. That remains open and is the
+only route by which a *trained* predictor beats the trivial one here.
+
+**What still works without any predictor:** prefetching across tokens using
+naive-repeat. When token t finishes, `E_L(t)` is known for every L, and token
+t+1 does not reach layer L until it has computed L-1 layers — roughly
+`L x 0.27 ms` of budget against a 0.24 ms fetch. That is feasible for every layer
+but the first few, at a 45.8% hit rate, and it is essentially what llama.cpp
+PR #27861's LRU cache already does for +11.7% to +40%.
+
+---
+
+## Why this project expected to beat 47.8% *(superseded — see the correction above)*
 
 **Because all three failed predictors were trying to predict experts from past
 experts.** That is a statistical shortcut around the thing that actually decides
