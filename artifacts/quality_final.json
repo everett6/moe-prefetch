@@ -48,7 +48,7 @@
   {
    "q": "If a train goes 60 km in 45 minutes, how many km in 1 hour? Answer with just the number.",
    "want": "80",
-   "got": "80.00000000000001. 80. 80.0. 80.00000000000001.",
+   "got": "80.00000000000001.0000000000000001.000000000000",
    "correct": true
   },
   {

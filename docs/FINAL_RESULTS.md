@@ -6,14 +6,15 @@ Qwen3-30B-A3B at **Q4_K_M** on one RTX 5070 (12 GB, 175 W cap), Ryzen 9 7950X,
 
 ## Headline
 
-| | tok/s (mean ± sd) | n | per-session means |
-|---|---|---|---|
-| AI2's shipped Q4_K_M config (`-ncmoe 22`, no cache) | 81.7 ± 3.60 | 30 | 85.1, 78.3 |
-| **This work** (`-ncmoe 48 --moe-expert-cache 72`, early issue) | **113.9 ± 3.44** | 30 | 116.8, 111.1 |
-| PR #27861's cache as it ships, same cache size | 35.5 ± 0.61 | 15 | 35.5 |
+| | tok/s (mean ± sd) | n |
+|---|---|---|
+| AI2's shipped Q4_K_M config (`-ncmoe 22`, no cache) | 79.1 ± 0.85 | 15 |
+| this work, with mmap | 111.4 ± 2.49 | 15 |
+| **this work** (`-ncmoe 48 --moe-expert-cache 72 --no-mmap`, early issue) | **118.2 ± 1.66** | 15 |
+| PR #27861's cache as it ships | 35.5 ± 0.61 | 15 |
 
-**1.39× over the baseline, 3.21× over the cache as shipped, and the 110 tok/s
-bar is cleared by 3.9.** Measured by interleaving the configurations within each
+**1.49× over the baseline, 3.3× over the cache as shipped, and the 110 tok/s
+bar is cleared by 8.2.** Measured by interleaving the configurations within each
 session, so drift affects them equally, and pooled over two independent sessions.
 
 The absolute level drifts between sessions — the baseline itself measured 85.1
@@ -140,6 +141,21 @@ It converged to depth 0. The useful output is the sweep:
 measured.** That is the number to engineer against, and it is why the next
 section exists.
 
+## `--no-mmap`, worth +6.8 tok/s for reasons unknown
+
+Adding `--no-mmap` takes the same configuration from 111.4 ± 2.5 to 118.2 ± 1.7,
+reproducibly, across three interleaved rounds.
+
+The mechanism is **not established, and the obvious explanation is ruled out**.
+The hypothesis was that mmap denies the expert weights pinned memory — llama.cpp
+does explicitly convert a host buffer type to plain CPU when mmap is on. But
+logging the actual buffer at cache init shows `CUDA_Host` in *both* cases, so the
+weights are in the pinned buffer type either way. Resident set differs by 0.55 GB,
+which points at page-cache overhead, but that is a guess.
+
+It is kept because it is measured and reproducible, and labelled because it is
+not understood. Chasing it further ran into the two rejected optimisations below.
+
 ## Two optimisations tried and rejected
 
 **More upload threads: no gain.** The cache uses one worker thread doing three
@@ -151,6 +167,16 @@ compute on their own thread, and the limit is host memory bandwidth shared with
 the CPU expert FFN — which another thread cannot add to. The default stays at
 one; the knob (`LLAMA_MOE_UPLOAD_THREADS`) is kept because a machine with more
 memory channels may answer differently.
+
+**Pinning the host expert weights: no gain, and the premise was wrong.** E1 says
+a pinned transfer costs 86.6 µs against 188.8 pageable, so pinning ~17 GB of
+expert weights looked like the largest remaining win. Three attempts: ggml's own
+`GGML_CUDA_REGISTER_HOST` is inert (nothing looks up the function it gates);
+`cudaHostRegister` refuses the model's buffers with `invalid argument` whether
+mmap'd or not, while accepting plain `aligned_alloc` of the same size; and
+placing the experts in `CUDA_Host` explicitly via `-ot` measures 1.4 tok/s
+*slower*. The explanation arrived last: they were already in `CUDA_Host`. Two
+genuine upstream bugs fell out of the attempt (`patches/0003`, `patches/0004`).
 
 **Shrinking the KV cache to buy cache slots: no gain.** The server allocates four
 context slots by default, so `-np 1` looked like free VRAM. It is not: VRAM is

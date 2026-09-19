@@ -1,0 +1,19 @@
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 87a6d67..9ffcb06 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -259,6 +259,14 @@ static void parse_tensor_buffer_overrides(const std::string & value, std::vector
+         if (buft) {
+             buft_list[ggml_backend_buft_name(buft)] = buft;
+         }
++        // Also expose each device's HOST buffer type (e.g. "CUDA_Host"), which is
++        // pinned memory. Without this, -ot can place a tensor on the device or in
++        // ordinary pageable CPU memory but never in pinned host memory, so
++        // host-resident weights can only ever be uploaded the slow way.
++        auto * hbuft = ggml_backend_dev_host_buffer_type(dev);
++        if (hbuft) {
++            buft_list[ggml_backend_buft_name(hbuft)] = hbuft;
++        }
+     }
+ 
+     for (const auto & override : string_split<std::string>(value, ',')) {

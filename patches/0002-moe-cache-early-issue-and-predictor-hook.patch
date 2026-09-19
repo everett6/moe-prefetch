@@ -1,5 +1,5 @@
 diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
-index 4e0732e..b0c9173 100644
+index 4e0732e..f263f57 100644
 --- a/src/llama-moecache.cpp
 +++ b/src/llama-moecache.cpp
 @@ -1,5 +1,7 @@
@@ -214,7 +214,7 @@ index 4e0732e..b0c9173 100644
              return;
          }
  
-@@ -161,6 +289,40 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+@@ -161,6 +289,55 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
              mc->max_inserts = max_inserts;
          }
  
@@ -252,10 +252,25 @@ index 4e0732e..b0c9173 100644
 +            mc->early_issue = true;
 +        }
 +
++        // Report where the expert weights actually live. LLAMA_LOG output from
++        // libllama does not reach llama-server's stderr, so a configuration that
++        // silently did not take effect is indistinguishable from one that did --
++        // which has already produced two no-op experiments in this project.
++        for (size_t il = 0; il < model.layers.size(); ++il) {
++            const auto & l = model.layers[il];
++            if (l.ffn_up_exps && l.ffn_up_exps->buffer) {
++                fprintf(stderr, "moe-cache: expert weights live in buffer '%s' (host=%d)\n",
++                        ggml_backend_buffer_name(l.ffn_up_exps->buffer),
++                        (int) ggml_backend_buffer_is_host(l.ffn_up_exps->buffer));
++                fflush(stderr);
++                break;
++            }
++        }
++
          // collect the host-resident expert layers, grouped by the device buffer
          // type of that layer's router (the cache lives next to the router)
          struct cand { int il; const llama_layer * l; };
-@@ -275,47 +437,67 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+@@ -275,47 +452,67 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
              ls.expert_slot.assign(n_expert, -1);
              ls.slot_last_use.assign(n_slots, 0);
              ls.slot_in_flight.assign(n_slots, false);
@@ -346,7 +361,7 @@ index 4e0732e..b0c9173 100644
      }();
  }
  
-@@ -347,6 +529,7 @@ void llama_moe_cache_step() {
+@@ -347,6 +544,7 @@ void llama_moe_cache_step() {
              ls.slot_last_use[j.slot]   = ++mc->clock;
              ls.slot_in_flight[j.slot]  = false;
              set_table_entry(ls.pub, j.expert, j.slot);
@@ -354,7 +369,7 @@ index 4e0732e..b0c9173 100644
          }
          mc->done.clear();
      }
-@@ -358,49 +541,99 @@ void llama_moe_cache_step() {
+@@ -358,49 +556,99 @@ void llama_moe_cache_step() {
      //    entry now), then hand the slice copies to the worker
      for (size_t li = 0; li < mc->layers.size(); ++li) {
          auto & ls = mc->layers[li];
@@ -376,7 +391,8 @@ index 4e0732e..b0c9173 100644
 +                if (ls.expert_slot[id] >= 0) {
 +                    continue;
 +                }
-+
+ 
+-            // victim: an empty non-in-flight slot if any, else the LRU non-in-flight slot
 +                // victim: an empty non-in-flight slot if any, else the LRU non-in-flight slot
 +                int32_t slot = -1;
 +                uint64_t best = UINT64_MAX;
@@ -406,8 +422,7 @@ index 4e0732e..b0c9173 100644
 +            ls.pending.clear();
 +            continue;
 +        }
- 
--            // victim: an empty non-in-flight slot if any, else the LRU non-in-flight slot
++
 +        // Early-issue path: the copies were handed to the worker during the
 +        // graph, out of slots freed at an earlier step. All that is left here
 +        // is to top the pool back up -- which is an eviction, and therefore a

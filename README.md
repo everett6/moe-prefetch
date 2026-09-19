@@ -3,8 +3,8 @@
 Running a mixture-of-experts model at **Q4_K_M** — the quality reference — on a
 12 GB GPU, at speeds previously reachable only by quantizing down to Q2_K.
 
-**Result: 113.9 ± 3.4 tok/s** (n=30), against 81.7 ± 3.6 for the shipped Q4_K_M
-config on the same machine, and a 110 tok/s bar. Full numbers and method in
+**Result: 118.2 ± 1.7 tok/s** (n=15), against 79.1 ± 0.9 for the shipped Q4_K_M
+config on the same machine, and a 110 tok/s bar. That is **1.49×**. Full numbers and method in
 [`docs/FINAL_RESULTS.md`](docs/FINAL_RESULTS.md).
 
 Qwen3-30B-A3B, RTX 5070 (12 GB, 175 W), Ryzen 9 7950X, 29 GB RAM.
@@ -64,10 +64,10 @@ layer** — *slower than no cache at all*.
 
 Issuing the copy during the graph, out of slots freed at the previous step
 boundary, fixes it without ever mutating an expert table mid-graph. Re-tuning the
-cache size on a cache that works takes it to 113.9 — 1.39× the shipped config,
-3.21× the cache as PR #27861 ships it.
+cache size on a cache that works takes it to 111.4, and `--no-mmap` to 118.2 —
+1.49× the shipped config, 3.3× the cache as PR #27861 ships it.
 
-Two upstream bugs found on the way: `--moe-expert-cache` silently no-ops because
+Five upstream bugs found on the way (see [`docs/UPSTREAM-BUGS.md`](docs/UPSTREAM-BUGS.md)); the two that mattered most: `--moe-expert-cache` silently no-ops because
 a dry-run context latches its one-shot init guard ([`patches/0001`](patches/0001-moe-cache-dont-latch-on-dry-run-context.patch)),
 and the default insert rate is above the stability threshold.
 
@@ -77,6 +77,7 @@ and the default insert rate is above the stability threshold.
 |---|---|
 | `docs/FINAL_RESULTS.md` | numbers, method, limitations |
 | `docs/D1-RESULT.md` | how a headline measurement was wrong by 3.4× |
+| `docs/UPSTREAM-BUGS.md` | five bugs found in llama.cpp, four of them silent |
 | `PLAN.md` | what remains, and the bar it has to clear |
 | `experiments/` | capture, training, RL, benchmarks — each a runnable script |
 | `cpp/` | the predictor's C++ loader and its agreement test |

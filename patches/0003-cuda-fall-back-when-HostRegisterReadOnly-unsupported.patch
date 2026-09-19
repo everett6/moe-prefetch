@@ -1,0 +1,28 @@
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 2456f7d..731dea8 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -4644,12 +4644,22 @@ bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
+     }
+ 
+ #if CUDART_VERSION >= 11010 || defined(GGML_USE_MUSA) || defined(GGML_USE_HIP)
++    // cudaHostRegisterReadOnly is not supported on every driver/GPU pair -- on an
++    // RTX 5070 with driver 595.91.07 it returns "operation not supported" for any
++    // size, while the same call without that flag succeeds. Since the flag is
++    // only a hint that the device will not write the region, falling back to
++    // plain Portable keeps pinned host memory working instead of silently giving
++    // it up.
+     cudaError_t err = cudaHostRegister(buffer, size, cudaHostRegisterPortable | cudaHostRegisterReadOnly);
++    if (err == cudaErrorNotSupported) {
++        (void)cudaGetLastError();
++        err = cudaHostRegister(buffer, size, cudaHostRegisterPortable);
++    }
+     if (err != cudaSuccess) {
+         // clear the error
+         (void)cudaGetLastError();
+ 
+-        GGML_LOG_DEBUG("%s: failed to register %.2f MiB of pinned memory: %s\n", __func__,
++        GGML_LOG_WARN("%s: failed to register %.2f MiB of pinned memory: %s\n", __func__,
+                            size / 1024.0 / 1024.0, cudaGetErrorString(err));
+         return false;
+     }
