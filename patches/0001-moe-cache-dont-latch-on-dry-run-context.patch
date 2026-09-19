@@ -1,0 +1,18 @@
+diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
+index 4e0732e..93aca25 100644
+--- a/src/llama-moecache.cpp
++++ b/src/llama-moecache.cpp
+@@ -151,7 +151,12 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+     }
+     [&]() {
+         if (n_slots <= 0) {
+-            g_init_done = true;
++            // Do NOT latch g_init_done here. llama.cpp creates a dry-run context
++            // for memory estimation before the real one, and that context carries
++            // default params (n_moe_cache_slots = 0). Latching on it permanently
++            // disabled the cache for the real context that follows -- silently,
++            // since this branch logs nothing: --moe-expert-cache parsed, plumbed
++            // through to here, and then did nothing at all.
+             return;
+         }
+ 
