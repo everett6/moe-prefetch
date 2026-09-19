@@ -234,10 +234,23 @@ def main():
     ap.add_argument("--patience", type=int, default=6)
     ap.add_argument("--batch", type=int, default=16384)
     ap.add_argument("--tag", default="FRESH_SUPERVISED")
+    ap.add_argument("--decode-only", action="store_true",
+                    help="fit and score on decode rows only. The prefetcher runs "
+                         "at decode; prefill rows are half the real index and a "
+                         "regime where every layer uses all 128 experts, so there "
+                         "is nothing there to predict. Measured worth +2.95 points "
+                         "of decode recall (artifacts/r5b_phase.json).")
+    ap.add_argument("--corpus", default=os.path.join(ROOT, "data", "corpus-v4"))
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ix = Index(args.index)
+    if args.decode_only:
+        sys.path.insert(0, HERE)
+        from r5b_phase import phase_mask, Subset
+        dec = phase_mask(ix, args.corpus)
+        ix = Subset(ix, dec)
+        print(f"decode-only: {ix.n:,} of {len(dec):,} pairs", file=sys.stderr)
     meta = json.load(open(args.index + ".meta.json"))
     print(f"index: {ix.n:,} pairs, {ix.n_layers} layers, registers {ix.registers}",
           file=sys.stderr)

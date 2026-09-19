@@ -1,0 +1,29 @@
+{
+ "mixed": {
+  "train_rows": 7218675,
+  "val_decode_recall8": 0.7134387015927153,
+  "val_decode_recall8_hard": 0.6776483699229712,
+  "val_prefill_recall8": 0.38997320963709287,
+  "latency_us": 58.907639500830555,
+  "params": 3151872,
+  "macs": 4096
+ },
+ "decode": {
+  "train_rows": 3243658,
+  "val_decode_recall8": 0.7429219631568215,
+  "val_decode_recall8_hard": 0.7081625111154739,
+  "val_prefill_recall8": 0.14714245664624134,
+  "latency_us": 58.533078501568525,
+  "params": 3151872,
+  "macs": 4096
+ },
+ "prefill": {
+  "train_rows": 3975017,
+  "val_decode_recall8": 0.35259255865915184,
+  "val_decode_recall8_hard": 0.34013927544433026,
+  "val_prefill_recall8": 0.42256272778245024,
+  "latency_us": 59.677415498299524,
+  "params": 3151872,
+  "macs": 4096
+ }
+}
