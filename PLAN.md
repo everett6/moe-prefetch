@@ -41,6 +41,21 @@ Which resolves the two bounds that have straddled the bar since milestone 3:
 
 No toolkit, no build, no root. It was measurable all along.
 
+## Status: all steps executed, 2026-09-18
+
+| step | outcome |
+|---|---|
+| M5a measure `FIXED` | **done** — 10.5 us, 3% of SLOPE. No toolkit needed. |
+| M5b collapse the range | **done** — 124.2 tok/s at top-8, clearing the bar |
+| M5c spend the headroom | **done** — top-16 prefetch, **129.1 tok/s** |
+| M5d decide and write it up | **done** — cleared; `docs/INTEGRATION.md` |
+
+**Verdict: 129.1 tok/s at Q4_K_M, 1.66x over today's 77.9, +19 over the 110 bar.**
+Robust to `FIXED` being 12x larger than measured. The remaining work is the
+llama.cpp integration, specified in [`docs/INTEGRATION.md`](docs/INTEGRATION.md),
+which needs the CUDA toolkit as root and should start from PR #27861 rather than
+mainline.
+
 ## Steps
 
 **M5a — measure `FIXED`.** Round-trip a 2048-float hidden state GPU→CPU→GPU with
