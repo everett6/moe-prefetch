@@ -65,7 +65,20 @@ epochs than about nonlinearity. Redo it properly — Adam, learning-rate schedul
 early stopping on the validation register. *If a tuned MLP still loses to ridge,
 that is a real finding and A2 is where the effort goes instead.*
 
-**A2. Richer inputs.** The probe sees only `h_L`. Three additions, each free at
+**A2. Richer inputs. — DONE 2026-09-18. The big win: 68.9% recall, 133.3 tok/s.**
+
+Adding features the model already computes took recall@8 from 59.6% to **68.9%**
+and end-to-end speed from 129.1 to **133.3 tok/s** (1.71x over today's 77.9,
++23 over the bar). The most valuable single feature was `E_L`, this layer's own
+experts — **+7.9 points**, despite being worth essentially nothing alone (6.5%
+against a 6.2% floor in milestone 1). Trajectory features added nothing (+0.7).
+`ffn_moe_logits` was dropped without testing: it is a linear projection of `h_L`,
+which the probe already has.
+
+Prefetch depth re-tuned to **top-8** — it matches top-16's speed on 30% less
+bandwidth now that the predictor is better.
+
+**A2 (original text). Richer inputs.** The probe sees only `h_L`. Three additions, each free at
 inference time because the model has already computed them:
 - `ffn_moe_logits-L` — the router's own 128-d scores for layer L
 - the previous token's experts at layer L+1 as *features*, not merely as the

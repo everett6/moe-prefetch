@@ -1,0 +1,37 @@
+{
+ "capacity": 66,
+ "top_p": 12,
+ "tokens": 250,
+ "layer_ms_target": 0.27,
+ "layer_ms_actual": 0.39580199991178233,
+ "results": {
+  "lru": {
+   "hits": 77747,
+   "misses": 14210,
+   "late": 3867,
+   "fetches": 14210,
+   "bytes": 43508760610,
+   "evictions": 11042,
+   "expert_hit_rate": 0.8113520621138754,
+   "late_rate": 0.04035523459676073,
+   "gb_moved": 43.50876061,
+   "wall_s": 5.257881511999585,
+   "demanded_gbps": 8.274960268827646,
+   "full_layer_rate": 0.5665386541993656
+  },
+  "lru+predict": {
+   "hits": 83105,
+   "misses": 2324,
+   "late": 10395,
+   "fetches": 18315,
+   "bytes": 56077617915,
+   "evictions": 15147,
+   "expert_hit_rate": 0.8672670729671064,
+   "late_rate": 0.10848013023877108,
+   "gb_moved": 56.077617915,
+   "wall_s": 5.291865899998811,
+   "demanded_gbps": 10.596946138603512,
+   "full_layer_rate": 0.6897645683753548
+  }
+ }
+}

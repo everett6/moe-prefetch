@@ -55,7 +55,63 @@ The honest reading recorded there: *"the exploitable structure is almost entirel
 'experts recur as themselves across adjacent tokens' — not richer cross-expert
 transition patterns."*
 
-## VERDICT (2026-09-18): **129 tok/s at Q4_K_M — it clears the bar**
+## VERDICT (2026-09-18): **133 tok/s at Q4_K_M — 1.71x, +23 over the bar**
+
+| | tok/s | |
+|---|---|---|
+| Q4_K_M today (`--n-cpu-moe 22`) | 77.9 | the thing being fixed |
+| the bar (`ud-q3_k_xl`, Q4_K_M-equal accuracy) | 110 | must beat this to be worth building |
+| LRU cache alone | 113.0 | what PR #27861 already gets you |
+| LRU + probe on `h_L` only | 129.1 | milestone 4 |
+| **LRU + probe on richer inputs (A2)** | **133.3** | **1.71x** |
+
+Measured end to end through the real prefetch engine — real pinned-memory copies
+on a dedicated CUDA stream, deadlines enforced with CUDA events, 250 held-out
+tokens from registers never seen in training.
+
+### A2: the inputs mattered far more than the model
+
+A1 retrained the MLP properly and it only tied linear ridge, which said the
+bottleneck was signal rather than capacity. A2 added signal, all of it already
+computed by the model and free at inference:
+
+| features | recall@8 | vs `h` alone |
+|---|---|---|
+| `h` (milestone 2 baseline) | 59.6% | — |
+| `h` + prev token's experts at L+1 | 65.7% | +6.1 |
+| **`h` + this layer's own experts `E_L`** | **67.5%** | **+7.9** |
+| `h` + trajectory `h_L(t) − h_L(t−1)` | 60.3% | +0.7 |
+| `h_norm` + prev + cur | **68.9%** | **+9.3** |
+
+**The single most valuable feature is the current layer's own experts** — and
+alone it is worth almost nothing. Milestone 1 measured `E_L → E_{L+1}` at 6.5%
+against a 6.2% random floor and concluded the cross-layer expert signal was dead.
+It is dead *on its own*; conditioned on the hidden state it is worth +7.9 points.
+A feature can be useless in isolation and the best thing available in
+combination, and this repo got that wrong the first time round.
+
+It is also available in time. `E_L` is known once layer L's router has run, and
+the prefetch still overlaps layer L's **FFN**, which is the bulk of a layer's
+cost — a smaller budget than "all of layer L", but not much smaller.
+
+`ffn_moe_logits` was in the plan and was dropped on reflection rather than
+tested: the router's logits are `W_L · RMSNorm(h_L)`, a linear projection of the
+probe's existing input, so a linear model can already represent nearly all of it.
+The part it cannot — the normalisation — is `h_norm` above, worth +0.7.
+
+### Prefetch depth, re-tuned
+
+With the better predictor, **top-8 is now the right depth**: 133.2 tok/s on
+48.8 GB of traffic against top-16's 133.3 on 70.5 GB. The extra depth was
+compensating for a weaker predictor and is now 30% of the bandwidth for nothing.
+
+(Late-arrival rates move around 2-3 points between runs at fixed settings, so
+treat single-run differences below that as noise. The top-8-vs-top-16 conclusion
+rests on the traffic, which is not noisy.)
+
+---
+
+## Earlier verdict (milestone 5): 129 tok/s
 
 | | tok/s | |
 |---|---|---|
