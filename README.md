@@ -55,6 +55,51 @@ The honest reading recorded there: *"the exploitable structure is almost entirel
 'experts recur as themselves across adjacent tokens' — not richer cross-expert
 transition patterns."*
 
+## Milestone 2 result (2026-09-18): 59.7% on a clean split, +20.2 points over the bar
+
+Milestone 1's 51.3% was a ceiling — ridge strength and ensemble weight were both
+chosen on the held-out rows. Milestone 2 removes that and scales the data:
+**173,991 rows from 40 prompts across 8 registers**, split three ways *by
+register* (5 train / 1 validate / 2 test), every hyperparameter chosen on
+validation, test registers scored once.
+
+| predictor | recall@8 | prefetchable? |
+|---|---|---|
+| **ridge probe on `h_L` + repeat prior** | **59.7%** | **yes** |
+| ridge probe on `h_L` alone | 54.1% | yes |
+| MLP probe + repeat prior | 52.0% | yes |
+| MLP probe on `h_L` alone | 43.7% | yes |
+| naive-repeat (the bar) | 39.5% | no |
+| random | 6.3% | — |
+
+**+20.2 points over the naive-repeat bar, winning on 47 of 47 layer transitions**
+— and unlike the bar, this is prefetchable. Test registers (`science`,
+`technical`) were never seen in training or tuning. Features are PCA to 256 dims
+fitted on train rows only, retaining 98.8% of variance.
+
+It holds across depth, which is what makes it look structural rather than fitted:
+
+| layers | probe + prior | naive-repeat |
+|---|---|---|
+| 0–15 | 57.8% | 37.8% |
+| 16–31 | 58.0% | 43.3% |
+| 32–46 | 63.3% | 37.2% |
+
+Per-layer gain over the bar ranges from +1.0 to +56.0 points; it is never
+negative.
+
+**The MLP underperformed the linear ridge** (43.7% vs 54.1%), which is worth
+flagging rather than hiding. That is most likely my training setup — plain SGD,
+fixed learning rate, 150 epochs, no tuning — and not evidence that nonlinearity
+cannot help. It is an open item, not a finding.
+
+**Next (milestone 3):** build the async prefetch engine against this predictor.
+The predictor is cheap by construction — a 256x128 matrix per layer on PCA
+features, which is ~33K multiply-adds per layer against the ~2.9 MiB expert
+fetch it decides.
+
+---
+
 ## Milestone 1 result (2026-09-18): green light, via a different mechanism
 
 **A prefetchable predictor reaches 51.3% recall@8, against the 45.8% bar that
