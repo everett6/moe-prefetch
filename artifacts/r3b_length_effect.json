@@ -1,0 +1,41 @@
+{
+ "BASELINE-ncmoe22": {
+  "n_prompts": 23,
+  "pearson_log_tokens": -0.649,
+  "spearman": -0.668,
+  "short_half_tok_s": 79.4,
+  "long_half_tok_s": 78.2,
+  "delta_tok_s": -1.2,
+  "median_tokens": 167,
+  "between_prompt_sd": 1.12,
+  "within_prompt_sd": 2.38,
+  "sem_of_mean": 0.23,
+  "mean_tok_s": 78.74
+ },
+ "PREV-BEST-mmap": {
+  "n_prompts": 23,
+  "pearson_log_tokens": -0.178,
+  "spearman": -0.19,
+  "short_half_tok_s": 121.3,
+  "long_half_tok_s": 118.9,
+  "delta_tok_s": -2.4,
+  "median_tokens": 167,
+  "between_prompt_sd": 9.88,
+  "within_prompt_sd": 4.84,
+  "sem_of_mean": 2.06,
+  "mean_tok_s": 120.0
+ },
+ "NEW-BEST-nommap": {
+  "n_prompts": 23,
+  "pearson_log_tokens": -0.274,
+  "spearman": -0.265,
+  "short_half_tok_s": 128.0,
+  "long_half_tok_s": 124.5,
+  "delta_tok_s": -3.5,
+  "median_tokens": 167,
+  "between_prompt_sd": 7.27,
+  "within_prompt_sd": 2.7,
+  "sem_of_mean": 1.51,
+  "mean_tok_s": 126.2
+ }
+}

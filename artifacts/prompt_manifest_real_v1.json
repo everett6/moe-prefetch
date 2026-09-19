@@ -1,0 +1,132 @@
+{
+  "version": "real-v1-20260919",
+  "max_chars": 20000,
+  "sources": {
+    "humaneval": {
+      "n": 164,
+      "file": "humaneval.jsonl",
+      "sha256": "83280db22f1a84d0ea3ecf42cfd047cff3c7aa37e00744cd044758dcb39d31ae",
+      "groups": [
+        "humaneval"
+      ],
+      "n_groups": 1,
+      "chars_total": 81442,
+      "truncated": 0,
+      "fetched_at": "2026-09-19T11:13:33",
+      "seconds": 0.8
+    },
+    "mbpp": {
+      "n": 970,
+      "file": "mbpp.jsonl",
+      "sha256": "6fb818d4715984893ce0016e322a3bfdb3b600cfb227be35f8ff3af53d951754",
+      "groups": [
+        "mbpp"
+      ],
+      "n_groups": 1,
+      "chars_total": 76291,
+      "truncated": 0,
+      "fetched_at": "2026-09-19T11:13:48",
+      "seconds": 2.9
+    },
+    "no_robots": {
+      "n": 800,
+      "file": "no_robots.jsonl",
+      "sha256": "9f59767ff79662553edde9f1044c37f7fa92fcdfeaf9327df466b63e9ac18c88",
+      "groups": [
+        "no_robots:Brainstorm",
+        "no_robots:Classify",
+        "no_robots:Coding",
+        "no_robots:Generation",
+        "no_robots:Open QA"
+      ],
+      "n_groups": 5,
+      "chars_total": 164525,
+      "truncated": 0,
+      "fetched_at": "2026-09-19T11:14:14",
+      "seconds": 13.6
+    },
+    "swebench": {
+      "n": 2275,
+      "file": "swebench.jsonl",
+      "sha256": "3caca776e19d7a483f5ae4e54a1e8777e8dcd29e6f77383579077d253e9089cd",
+      "groups": [
+        "astropy/astropy",
+        "django/django",
+        "matplotlib/matplotlib",
+        "mwaskom/seaborn",
+        "pallets/flask",
+        "psf/requests",
+        "pydata/xarray",
+        "pylint-dev/pylint",
+        "pytest-dev/pytest",
+        "scikit-learn/scikit-learn",
+        "sphinx-doc/sphinx",
+        "sympy/sympy"
+      ],
+      "n_groups": 12,
+      "chars_total": 3955974,
+      "truncated": 9,
+      "fetched_at": "2026-09-19T11:15:39",
+      "seconds": 9.3
+    },
+    "so": {
+      "n": 319,
+      "file": "so.jsonl",
+      "sha256": "545b4ebc1861b42a3892417bc738c5ad5365b647cbc49ad442043cc5d177a496",
+      "groups": [
+        "se:stackoverflow:c++",
+        "se:stackoverflow:python"
+      ],
+      "n_groups": 2,
+      "chars_total": 154822,
+      "truncated": 0,
+      "fetched_at": "2026-09-19T11:22:33",
+      "seconds": 3.4
+    },
+    "se_decision": {
+      "n": 590,
+      "file": "se_decision.jsonl",
+      "sha256": "36242e74e856751080a26a1676b7a22cb81480d086a85168cf921ff81c9340af",
+      "groups": [
+        "se:devops",
+        "se:security",
+        "se:softwareengineering"
+      ],
+      "n_groups": 3,
+      "chars_total": 625240,
+      "truncated": 0,
+      "fetched_at": "2026-09-19T11:22:39",
+      "seconds": 5.9
+    },
+    "oasst1": {
+      "n": 700,
+      "file": "oasst1.jsonl",
+      "sha256": "b50251bd0cec765c5dca839affd18be90c565601e629fa832333c173a280b494",
+      "groups": [
+        "oasst1"
+      ],
+      "n_groups": 1,
+      "chars_total": 101549,
+      "truncated": 0,
+      "fetched_at": "2026-09-19T11:24:25",
+      "seconds": 23.2
+    },
+    "github_issues": {
+      "n": 902,
+      "file": "github_issues.jsonl",
+      "sha256": "9db1c8bc2f3688a2cd7a0f9829ef7ac9e23ac30f634dfbea372aee8125b3c4d3",
+      "groups": [
+        "ggml-org/llama.cpp",
+        "huggingface/transformers",
+        "numpy/numpy",
+        "pytorch/pytorch",
+        "vllm-project/vllm"
+      ],
+      "n_groups": 5,
+      "chars_total": 4149208,
+      "truncated": 23,
+      "fetched_at": "2026-09-19T11:25:16",
+      "seconds": 38.4
+    }
+  }
+}

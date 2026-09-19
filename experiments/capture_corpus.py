@@ -62,22 +62,34 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-from corpus_prompts import build_corpus  # noqa: E402
+# Which corpus. "real" is the default from v4 on: the synthetic corpus is 616
+# prompts of a median 14 tokens containing no code at all (artifacts/
+# r2_characterisation.json), which is not what this model is asked to route.
+PROMPT_SET = os.environ.get("PROMPT_SET", "real")
+if PROMPT_SET == "real":
+    from real_prompts import build_real_corpus as build_corpus  # noqa: E402
+else:
+    from corpus_prompts import build_corpus  # noqa: E402
 
 MODEL = os.environ.get(
     "MODEL",
     "/home/everett/.lmstudio/models/lmstudio-community/"
     "Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
 )
-OUTDIR = os.environ.get("OUTDIR", os.path.join(ROOT, "data", "corpus"))
+OUTDIR = os.environ.get("OUTDIR", os.path.join(ROOT, "data", "corpus-v4"))
 MANIFEST = os.path.join(OUTDIR, "manifest.json")
 N_PREDICT = int(os.environ.get("N_PREDICT", "0"))   # 0 = use the session schedule
 FLUSH_ROWS = int(os.environ.get("FLUSH_ROWS", "120000"))
 LIMIT = int(os.environ.get("LIMIT", "0"))          # 0 = whole corpus
-PER_REGISTER = int(os.environ.get("PER_REGISTER", "36"))
+PER_REGISTER = int(os.environ.get("PER_REGISTER", "1400"))
+# Real prompts are ~30x longer than the synthetic ones, so a fixed byte budget
+# buys ~30x fewer of them. Positions within a prompt are highly correlated and
+# prompts are not, so the budget is spent on prompt diversity: at most this many
+# positions are STORED per prompt, chosen after labelling.
+KEEP_POSITIONS = int(os.environ.get("KEEP_POSITIONS", "128"))
 SPLIT_SEED = int(os.environ.get("SPLIT_SEED", "20260918"))
 SCHEMA_VERSION = 3
-DATASET_VERSION = os.environ.get("DATASET_VERSION", "v3-20260919-fresh")
+DATASET_VERSION = os.environ.get("DATASET_VERSION", "v4-20260919-real")
 TARGET_BYTES = float(os.environ.get("TARGET_GB", "0")) * 1e9   # 0 = no cap
 
 GGML_MAX_DIMS, GGML_MAX_SRC, GGML_MAX_OP_PARAMS_I32, GGML_MAX_NAME = 4, 10, 16, 64
@@ -111,8 +123,36 @@ SESSION_PLANS = [
 ]
 
 
-def plan_for(pid):
-    return SESSION_PLANS[pid % len(SESSION_PLANS)]
+# Real prompts span 14 to 15,133 tokens, so n_ctx cannot be a free variable the
+# way it was for a corpus whose longest prompt was 24 tokens -- it has to be big
+# enough to hold the prompt. n_predict and n_batch stay free and cycle on the
+# prompt id, which keeps batch size and continuation length orthogonal to length
+# rather than confounded with it.
+CTX_LADDER = [1024, 2048, 4096, 8192]
+PREDICT_CYCLE = [64, 128, 192]
+BATCH_CYCLE = [512, 256, 128, 64]
+CHARS_PER_TOKEN = 3.0          # conservative: code tokenises denser than prose
+
+
+def plan_for(pid, text=None):
+    """Session parameters for one prompt.
+
+    With no text this is the v3 behaviour, so the old corpus stays reproducible.
+    With text, n_ctx is the smallest rung that holds the prompt plus its
+    continuation plus a margin; a prompt too long for the top rung is truncated
+    and the truncation is recorded on the prompt.
+    """
+    if text is None:
+        return SESSION_PLANS[pid % len(SESSION_PLANS)]
+    n_predict = PREDICT_CYCLE[pid % len(PREDICT_CYCLE)]
+    n_batch = BATCH_CYCLE[(pid // len(PREDICT_CYCLE)) % len(BATCH_CYCLE)]
+    est = len(text) / CHARS_PER_TOKEN
+    need = est + n_predict + 64
+    n_ctx = next((c for c in CTX_LADDER if c >= need), CTX_LADDER[-1])
+    room = int((n_ctx - n_predict - 64) * CHARS_PER_TOKEN)
+    return {"n_predict": n_predict, "n_ctx": n_ctx, "n_batch": n_batch,
+            "label": f"ctx{n_ctx}-p{n_predict}-b{n_batch}",
+            "max_chars": room, "truncated": len(text) > room}
 
 
 def label_shard(H, E, Kk, n_expert, caps=(66, 32)):
@@ -184,22 +224,80 @@ def git_commit():
 
 
 def assign_splits(registers, seed):
-    """By REGISTER, so a held-out register is unseen subject matter. Deterministic
-    from the seed, and written to the manifest so it can never drift."""
+    """By GROUP, so a held-out group is a whole repo, site or category.
+
+    Real group keys are "<domain>/<group>" and are stratified within domain, so
+    LOCKED TEST always contains both coding and decision-making groups -- an
+    unstratified draw can put all the decision groups in train and then the test
+    number says nothing about half the workload. Synthetic register names have no
+    "/" and fall through to the original single-pool draw, so the v3 split stays
+    reproducible.
+
+    Deterministic from the seed and written to the manifest, which is what stops
+    a later hyperparameter search from quietly reassigning it.
+    """
     regs = sorted(registers)
-    rng = np.random.RandomState(seed)
-    order = list(rng.permutation(len(regs)))
-    n_test = max(3, len(regs) // 5)
-    n_val = max(2, len(regs) // 6)
+    strata = {}
+    for r in regs:
+        strata.setdefault(r.split("/", 1)[0] if "/" in r else "_", []).append(r)
     out = {}
-    for rank, i in enumerate(order):
-        if rank < n_test:
-            out[regs[i]] = "test"
-        elif rank < n_test + n_val:
-            out[regs[i]] = "val"
-        else:
-            out[regs[i]] = "train"
+    for si, (name, pool) in enumerate(sorted(strata.items())):
+        rng = np.random.RandomState(seed + si)
+        order = list(rng.permutation(len(pool)))
+        n_test = max(1 if "/" in pool[0] else 3, len(pool) // 5)
+        n_val = max(1 if "/" in pool[0] else 2, len(pool) // 6)
+        for rank, i in enumerate(order):
+            if rank < n_test:
+                out[pool[i]] = "test"
+            elif rank < n_test + n_val:
+                out[pool[i]] = "val"
+            else:
+                out[pool[i]] = "train"
     return out
+
+
+def subsample_positions(K, keep, block=8):
+    """Keep at most `keep` positions per prompt, as CONTIGUOUS BLOCKS.
+
+    Three properties this has to have, and the reason it runs where it does:
+
+      labels first   lru_miss_66 and repeat_hit are computed on the FULL
+                     trajectory before anything is dropped, so a miss count
+                     still describes the real sequence rather than the sample.
+                     Subsampling first would make every row look like a cache
+                     miss, which is the exact failure the labels exist to catch.
+      whole stacks   a position is kept or dropped for all 48 layers at once. A
+                     partial layer stack cannot train a per-layer model and would
+                     silently skew the per-layer row counts.
+      adjacency      the strongest feature the model has is `prev`, the previous
+                     TOKEN's experts at the target layer. An evenly spaced sample
+                     of single positions has no t-1 for almost every t, so prev
+                     would be the missing-value fill on nearly every row and the
+                     repeat signal would vanish -- quietly, since -1 is a legal
+                     value. Blocks of `block` consecutive positions keep prev
+                     available for all but the first row of each block.
+
+    The head is kept in full because cold-start rows behave differently and
+    pooling them with warm rows has already produced one wrong number here.
+    """
+    mask = np.zeros(len(K), dtype=bool)
+    for pid in np.unique(K[:, 0]):
+        sel = K[:, 0] == pid
+        pos = np.unique(K[sel, 1])
+        if len(pos) <= keep:
+            chosen = pos
+        else:
+            head, tail, mid = pos[:16], pos[-16:], pos[16:-16]
+            n_blocks = max(1, (keep - 32) // block)
+            if len(mid) <= block:
+                picked = [mid]
+            else:
+                starts = np.unique(np.linspace(0, len(mid) - block,
+                                               n_blocks).astype(int))
+                picked = [mid[s:s + block] for s in starts]
+            chosen = np.unique(np.concatenate([head] + picked + [tail]))
+        mask |= sel & np.isin(K[:, 1], chosen)
+    return mask
 
 
 def summarise_coverage(m):
@@ -232,6 +330,19 @@ def summarise_coverage(m):
         "prompts_by_session": by_session, "prompts_by_register": by_reg,
         "prompts_by_split": by_split,
     }
+
+
+def _prompt_record(i, group, src, txt, splits):
+    """One manifest entry. The text stored is the text actually fed to the model,
+    truncation included -- a manifest that records the untruncated prompt would
+    misdescribe every row captured from it."""
+    plan = plan_for(i, txt) if PROMPT_SET == "real" else plan_for(i)
+    if plan.get("truncated"):
+        txt = txt[:plan["max_chars"]]
+    return {"id": i, "register": group, "source": src, "split": splits[group],
+            "session": plan["label"], "n_ctx": plan["n_ctx"],
+            "n_predict": plan["n_predict"], "n_batch": plan["n_batch"],
+            "truncated": bool(plan.get("truncated", False)), "text": txt}
 
 
 def load_manifest():
@@ -335,6 +446,13 @@ def flush_shard(m, idx):
     E = np.stack([ek[k] for k in keys])
     K = np.array(keys, dtype=np.int32)
     miss, rep = label_shard(H, E, K, N_EXPERT_MODEL)
+    n_full = int(H.shape[0])
+    keep = subsample_positions(K, KEEP_POSITIONS)
+    H, E, K = H[keep], E[keep], K[keep]
+    miss = {c: v[keep] for c, v in miss.items()}
+    rep = rep[keep]
+    if not len(K):
+        return None
     hist = np.bincount(E.reshape(-1).astype(np.int64), minlength=N_EXPERT_MODEL)
     name = f"shard-{idx:04d}.npz"
     path = os.path.join(OUTDIR, name)
@@ -348,8 +466,8 @@ def flush_shard(m, idx):
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
-    rec = {"file": name, "rows": int(H.shape[0]),
-           "prompt_ids": sorted({int(k[0]) for k in keys}),
+    rec = {"file": name, "rows": int(H.shape[0]), "rows_before_subsample": n_full,
+           "prompt_ids": sorted({int(v) for v in np.unique(K[:, 0])}),
            "bytes": os.path.getsize(path), "sha256": sha256_file(path),
            "expert_hist": hist.tolist(),
            "mean_lru_miss_66": float(miss[66].mean()),
@@ -388,6 +506,8 @@ def main():
             "capture": {"n_predict_override": N_PREDICT or None,
                         "session_plans": SESSION_PLANS,
                         "per_register": PER_REGISTER,
+                        "prompt_set": PROMPT_SET,
+                        "keep_positions": KEEP_POSITIONS,
                         "flush_rows": FLUSH_ROWS, "device": "cpu",
                         "sampling": "greedy"},
             "features": {"hidden_tensor": "ffn_inp-<L>", "hidden_dtype": "float16",
@@ -399,8 +519,7 @@ def main():
                              "repeat_hit": "uint8, overlap with the previous token's experts at this layer"}},
             "d_model": 2048, "n_expert": 128,
             "split_seed": SPLIT_SEED, "splits": splits,
-            "prompts": [{"id": i, "register": r, "source": src, "split": splits[r],
-                         "session": plan_for(i)["label"], "text": txt}
+            "prompts": [_prompt_record(i, r, src, txt, splits) 
                         for i, (r, txt, src) in enumerate(corpus)],
             "shards": [], "done_prompt_ids": [],
         }
@@ -433,17 +552,51 @@ def main():
     t0 = time.time()
     pending = []
     for n_done, (pid, reg, prompt) in enumerate(todo):
-        plan = plan_for(pid)
+        plan = plan_for(pid, prompt) if PROMPT_SET == "real" else plan_for(pid)
+        if plan.get("truncated"):
+            prompt = prompt[:plan["max_chars"]]
         n_pred = N_PREDICT or plan["n_predict"]
         cp = lc.llama_context_default_params()
         cp.n_ctx, cp.n_batch, cp.cb_eval = plan["n_ctx"], plan["n_batch"], cb
+        # n_ubatch must not exceed n_batch; its default is 512 and the plans go
+        # down to 64.
+        cp.n_ubatch = min(plan["n_batch"], 512)
         ctx = lc.llama_init_from_model(model, cp)
         CUR["pid"], CUR["pos"] = pid, 0
         raw = prompt.encode()
-        toks = (lc.llama_token * 256)()
-        n = lc.llama_tokenize(vocab, raw, len(raw), toks, 256, True, True)
-        lc.llama_decode(ctx, lc.llama_batch_get_one(toks, n))
-        CUR["pos"] += n
+        # The token buffer has to hold the whole prompt. llama_tokenize returns a
+        # NEGATIVE count when it does not fit, and the v3 code passed a fixed
+        # 256-token buffer -- fine for a corpus whose longest prompt was 24
+        # tokens, and silently catastrophic for a 15,000-token GitHub issue:
+        # llama_batch_get_one would then be handed a negative length.
+        cap = max(64, len(raw) + 16)
+        toks = (lc.llama_token * cap)()
+        n = lc.llama_tokenize(vocab, raw, len(raw), toks, cap, True, True)
+        if n < 0:
+            print(f"  prompt {pid}: needs {-n} tokens, buffer {cap} -- skipped",
+                  file=sys.stderr)
+            lc.llama_free(ctx)
+            continue
+        # Second guard: the plan sizes n_ctx from a chars-per-token ESTIMATE, and
+        # an estimate that is wrong in the unlucky direction would overflow the
+        # context. Trim at token level so the prompt still fits.
+        room = plan["n_ctx"] - n_pred - 8
+        if n > room:
+            n = room
+        # Prefill in n_batch-sized chunks. llama_decode asserts
+        # n_tokens_all <= cparams.n_batch, so a 2,000-token prompt submitted as
+        # one batch aborts the process -- which a 14-token corpus never
+        # discovered. CUR["pos"] is advanced per chunk because the observe
+        # callback labels row i of the batch as position CUR["pos"] + i.
+        n_batch = plan["n_batch"]
+        pos = 0
+        while pos < n:
+            chunk = min(n_batch, n - pos)
+            sub = (lc.llama_token * chunk)(*toks[pos:pos + chunk])
+            CUR["pos"] = pos
+            lc.llama_decode(ctx, lc.llama_batch_get_one(sub, chunk))
+            pos += chunk
+        CUR["pos"] = n
         sampler = lc.llama_sampler_chain_init(lc.llama_sampler_chain_default_params())
         lc.llama_sampler_chain_add(sampler, lc.llama_sampler_init_greedy())
         for _ in range(n_pred):

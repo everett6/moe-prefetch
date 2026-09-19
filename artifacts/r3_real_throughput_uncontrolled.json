@@ -1,0 +1,2176 @@
+{
+ "prompt_set_version": "real-v1-20260919",
+ "ctx": 4096,
+ "n_predict": 200,
+ "rounds": 3,
+ "bench_prompts": [
+  {
+   "id": "github_issues:00325",
+   "source": "github_issues",
+   "group": "ggml-org/llama.cpp",
+   "domain": "code",
+   "band": "short",
+   "chars": 478,
+   "tokens": 122
+  },
+  {
+   "id": "humaneval:00083",
+   "source": "humaneval",
+   "group": "humaneval",
+   "domain": "code",
+   "band": "short",
+   "chars": 210,
+   "tokens": 47
+  },
+  {
+   "id": "mbpp:00039",
+   "source": "mbpp",
+   "group": "mbpp",
+   "domain": "code",
+   "band": "short",
+   "chars": 60,
+   "tokens": 12
+  },
+  {
+   "id": "no_robots:00535",
+   "source": "no_robots",
+   "group": "no_robots:Coding",
+   "domain": "code",
+   "band": "short",
+   "chars": 367,
+   "tokens": 95
+  },
+  {
+   "id": "github_issues:00088",
+   "source": "github_issues",
+   "group": "ggml-org/llama.cpp",
+   "domain": "code",
+   "band": "medium",
+   "chars": 1980,
+   "tokens": 644
+  },
+  {
+   "id": "humaneval:00129",
+   "source": "humaneval",
+   "group": "humaneval",
+   "domain": "code",
+   "band": "medium",
+   "chars": 1406,
+   "tokens": 399
+  },
+  {
+   "id": "no_robots:00350",
+   "source": "no_robots",
+   "group": "no_robots:Coding",
+   "domain": "code",
+   "band": "medium",
+   "chars": 867,
+   "tokens": 219
+  },
+  {
+   "id": "so:00282",
+   "source": "se_stackoverflow",
+   "group": "se:stackoverflow:c++",
+   "domain": "code",
+   "band": "medium",
+   "chars": 1261,
+   "tokens": 356
+  },
+  {
+   "id": "so:00223",
+   "source": "se_stackoverflow",
+   "group": "se:stackoverflow:c++",
+   "domain": "code",
+   "band": "long",
+   "chars": 4495,
+   "tokens": 917
+  },
+  {
+   "id": "swebench:01397",
+   "source": "swebench",
+   "group": "pytest-dev/pytest",
+   "domain": "code",
+   "band": "long",
+   "chars": 11242,
+   "tokens": 2695
+  },
+  {
+   "id": "github_issues:00767",
+   "source": "github_issues",
+   "group": "pytorch/pytorch",
+   "domain": "code",
+   "band": "long",
+   "chars": 4773,
+   "tokens": 1580
+  },
+  {
+   "id": "no_robots:00385",
+   "source": "no_robots",
+   "group": "no_robots:Generation",
+   "domain": "decision",
+   "band": "short",
+   "chars": 238,
+   "tokens": 54
+  },
+  {
+   "id": "oasst1:00271",
+   "source": "oasst1",
+   "group": "oasst1",
+   "domain": "decision",
+   "band": "short",
+   "chars": 34,
+   "tokens": 9
+  },
+  {
+   "id": "se_decision:00419",
+   "source": "se_devops",
+   "group": "se:devops",
+   "domain": "decision",
+   "band": "short",
+   "chars": 471,
+   "tokens": 87
+  },
+  {
+   "id": "se_decision:00502",
+   "source": "se_security",
+   "group": "se:security",
+   "domain": "decision",
+   "band": "short",
+   "chars": 430,
+   "tokens": 89
+  },
+  {
+   "id": "no_robots:00140",
+   "source": "no_robots",
+   "group": "no_robots:Generation",
+   "domain": "decision",
+   "band": "medium",
+   "chars": 622,
+   "tokens": 136
+  },
+  {
+   "id": "oasst1:00313",
+   "source": "oasst1",
+   "group": "oasst1",
+   "domain": "decision",
+   "band": "medium",
+   "chars": 640,
+   "tokens": 126
+  },
+  {
+   "id": "se_decision:00457",
+   "source": "se_devops",
+   "group": "se:devops",
+   "domain": "decision",
+   "band": "medium",
+   "chars": 801,
+   "tokens": 145
+  },
+  {
+   "id": "se_decision:00576",
+   "source": "se_security",
+   "group": "se:security",
+   "domain": "decision",
+   "band": "medium",
+   "chars": 830,
+   "tokens": 167
+  },
+  {
+   "id": "no_robots:00139",
+   "source": "no_robots",
+   "group": "no_robots:Generation",
+   "domain": "decision",
+   "band": "long",
+   "chars": 7460,
+   "tokens": 1506
+  },
+  {
+   "id": "se_decision:00435",
+   "source": "se_devops",
+   "group": "se:devops",
+   "domain": "decision",
+   "band": "long",
+   "chars": 2520,
+   "tokens": 483
+  },
+  {
+   "id": "se_decision:00566",
+   "source": "se_security",
+   "group": "se:security",
+   "domain": "decision",
+   "band": "long",
+   "chars": 4826,
+   "tokens": 1022
+  },
+  {
+   "id": "se_decision:00281",
+   "source": "se_softwareengineering",
+   "group": "se:softwareengineering",
+   "domain": "decision",
+   "band": "long",
+   "chars": 3060,
+   "tokens": 589
+  }
+ ],
+ "configs": {
+  "BASELINE-ncmoe22": {
+   "real_decode_tps": {
+    "n": 69,
+    "mean": 77.49,
+    "sd": 1.956,
+    "min": 71.69,
+    "max": 83.27
+   },
+   "real_prefill_tps": {
+    "n": 69,
+    "mean": 680.6,
+    "sd": 410.753,
+    "min": 130.23,
+    "max": 1364.32
+   },
+   "real_wall_s": {
+    "n": 69,
+    "mean": 3.12,
+    "sd": 0.5,
+    "min": 2.6,
+    "max": 4.75
+   },
+   "control_decode_tps": {
+    "n": 3,
+    "mean": 78.03,
+    "sd": 2.109,
+    "min": 75.64,
+    "max": 79.62
+   },
+   "per_prompt": [
+    {
+     "id": "github_issues:00325",
+     "source": "github_issues",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 122,
+     "decode_tps": 80.73077988773147,
+     "wall_s": 2.81
+    },
+    {
+     "id": "humaneval:00083",
+     "source": "humaneval",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 47,
+     "decode_tps": 80.85483469249363,
+     "wall_s": 2.72
+    },
+    {
+     "id": "mbpp:00039",
+     "source": "mbpp",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 12,
+     "decode_tps": 77.46985780193488,
+     "wall_s": 2.65
+    },
+    {
+     "id": "no_robots:00535",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 95,
+     "decode_tps": 77.94519238753567,
+     "wall_s": 2.87
+    },
+    {
+     "id": "github_issues:00088",
+     "source": "github_issues",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 644,
+     "decode_tps": 77.99122814237045,
+     "wall_s": 3.32
+    },
+    {
+     "id": "humaneval:00129",
+     "source": "humaneval",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 399,
+     "decode_tps": 78.4909851723035,
+     "wall_s": 2.97
+    },
+    {
+     "id": "no_robots:00350",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 219,
+     "decode_tps": 81.81479186769192,
+     "wall_s": 2.8
+    },
+    {
+     "id": "so:00282",
+     "source": "se_stackoverflow",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 356,
+     "decode_tps": 78.639217496317,
+     "wall_s": 2.96
+    },
+    {
+     "id": "so:00223",
+     "source": "se_stackoverflow",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 917,
+     "decode_tps": 77.20860251265503,
+     "wall_s": 3.38
+    },
+    {
+     "id": "swebench:01397",
+     "source": "swebench",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 2695,
+     "decode_tps": 73.34807420761044,
+     "wall_s": 4.75
+    },
+    {
+     "id": "github_issues:00767",
+     "source": "github_issues",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 1580,
+     "decode_tps": 75.86544748223929,
+     "wall_s": 4.17
+    },
+    {
+     "id": "no_robots:00385",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 54,
+     "decode_tps": 79.40238334832269,
+     "wall_s": 2.81
+    },
+    {
+     "id": "oasst1:00271",
+     "source": "oasst1",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 9,
+     "decode_tps": 79.08817297974429,
+     "wall_s": 2.6
+    },
+    {
+     "id": "se_decision:00419",
+     "source": "se_devops",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 87,
+     "decode_tps": 78.62032781911161,
+     "wall_s": 2.8
+    },
+    {
+     "id": "se_decision:00502",
+     "source": "se_security",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 89,
+     "decode_tps": 81.55099334437345,
+     "wall_s": 2.74
+    },
+    {
+     "id": "no_robots:00140",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 136,
+     "decode_tps": 80.04997693032072,
+     "wall_s": 2.76
+    },
+    {
+     "id": "oasst1:00313",
+     "source": "oasst1",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 126,
+     "decode_tps": 83.27453899801061,
+     "wall_s": 2.69
+    },
+    {
+     "id": "se_decision:00457",
+     "source": "se_devops",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 145,
+     "decode_tps": 77.60293502879499,
+     "wall_s": 2.89
+    },
+    {
+     "id": "se_decision:00576",
+     "source": "se_security",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 167,
+     "decode_tps": 77.55518012093152,
+     "wall_s": 2.87
+    },
+    {
+     "id": "no_robots:00139",
+     "source": "no_robots",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1506,
+     "decode_tps": 76.67110254586588,
+     "wall_s": 3.79
+    },
+    {
+     "id": "se_decision:00435",
+     "source": "se_devops",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 483,
+     "decode_tps": 77.86428060252085,
+     "wall_s": 2.99
+    },
+    {
+     "id": "se_decision:00566",
+     "source": "se_security",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1022,
+     "decode_tps": 76.84896089778123,
+     "wall_s": 3.41
+    },
+    {
+     "id": "se_decision:00281",
+     "source": "se_softwareengineering",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 589,
+     "decode_tps": 77.80445979855291,
+     "wall_s": 3.27
+    },
+    {
+     "id": "github_issues:00325",
+     "source": "github_issues",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 122,
+     "decode_tps": 75.60629409100717,
+     "wall_s": 2.98
+    },
+    {
+     "id": "humaneval:00083",
+     "source": "humaneval",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 47,
+     "decode_tps": 75.65446817570086,
+     "wall_s": 2.9
+    },
+    {
+     "id": "mbpp:00039",
+     "source": "mbpp",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 12,
+     "decode_tps": 75.6767363627859,
+     "wall_s": 2.71
+    },
+    {
+     "id": "no_robots:00535",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 95,
+     "decode_tps": 76.47378236637552,
+     "wall_s": 2.92
+    },
+    {
+     "id": "github_issues:00088",
+     "source": "github_issues",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 644,
+     "decode_tps": 75.99007623064783,
+     "wall_s": 3.4
+    },
+    {
+     "id": "humaneval:00129",
+     "source": "humaneval",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 399,
+     "decode_tps": 76.78680779490283,
+     "wall_s": 3.05
+    },
+    {
+     "id": "no_robots:00350",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 219,
+     "decode_tps": 76.59098527952052,
+     "wall_s": 2.98
+    },
+    {
+     "id": "so:00282",
+     "source": "se_stackoverflow",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 356,
+     "decode_tps": 76.68091107711633,
+     "wall_s": 3.05
+    },
+    {
+     "id": "so:00223",
+     "source": "se_stackoverflow",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 917,
+     "decode_tps": 75.49523355721401,
+     "wall_s": 3.46
+    },
+    {
+     "id": "swebench:01397",
+     "source": "swebench",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 2695,
+     "decode_tps": 74.81425200222112,
+     "wall_s": 4.68
+    },
+    {
+     "id": "github_issues:00767",
+     "source": "github_issues",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 1580,
+     "decode_tps": 77.54747347213942,
+     "wall_s": 4.11
+    },
+    {
+     "id": "no_robots:00385",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 54,
+     "decode_tps": 77.90210797623634,
+     "wall_s": 2.86
+    },
+    {
+     "id": "oasst1:00271",
+     "source": "oasst1",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 9,
+     "decode_tps": 76.59269505830859,
+     "wall_s": 2.67
+    },
+    {
+     "id": "se_decision:00419",
+     "source": "se_devops",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 87,
+     "decode_tps": 78.44210046659254,
+     "wall_s": 2.8
+    },
+    {
+     "id": "se_decision:00502",
+     "source": "se_security",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 89,
+     "decode_tps": 78.19634434054939,
+     "wall_s": 2.85
+    },
+    {
+     "id": "no_robots:00140",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 136,
+     "decode_tps": 76.16571823124065,
+     "wall_s": 2.9
+    },
+    {
+     "id": "oasst1:00313",
+     "source": "oasst1",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 126,
+     "decode_tps": 76.64774353279849,
+     "wall_s": 2.91
+    },
+    {
+     "id": "se_decision:00457",
+     "source": "se_devops",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 145,
+     "decode_tps": 76.98050729767472,
+     "wall_s": 2.93
+    },
+    {
+     "id": "se_decision:00576",
+     "source": "se_security",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 167,
+     "decode_tps": 80.36432906083176,
+     "wall_s": 2.79
+    },
+    {
+     "id": "no_robots:00139",
+     "source": "no_robots",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1506,
+     "decode_tps": 71.685388320469,
+     "wall_s": 3.98
+    },
+    {
+     "id": "se_decision:00435",
+     "source": "se_devops",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 483,
+     "decode_tps": 75.98058867774685,
+     "wall_s": 3.05
+    },
+    {
+     "id": "se_decision:00566",
+     "source": "se_security",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1022,
+     "decode_tps": 74.9483459013047,
+     "wall_s": 3.48
+    },
+    {
+     "id": "se_decision:00281",
+     "source": "se_softwareengineering",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 589,
+     "decode_tps": 77.29470100156843,
+     "wall_s": 3.3
+    },
+    {
+     "id": "github_issues:00325",
+     "source": "github_issues",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 122,
+     "decode_tps": 77.95734518807308,
+     "wall_s": 2.9
+    },
+    {
+     "id": "humaneval:00083",
+     "source": "humaneval",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 47,
+     "decode_tps": 78.90960409187933,
+     "wall_s": 2.78
+    },
+    {
+     "id": "mbpp:00039",
+     "source": "mbpp",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 12,
+     "decode_tps": 78.26834242203155,
+     "wall_s": 2.62
+    },
+    {
+     "id": "no_robots:00535",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 95,
+     "decode_tps": 80.46467338014301,
+     "wall_s": 2.78
+    },
+    {
+     "id": "github_issues:00088",
+     "source": "github_issues",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 644,
+     "decode_tps": 74.52365714174437,
+     "wall_s": 3.44
+    },
+    {
+     "id": "humaneval:00129",
+     "source": "humaneval",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 399,
+     "decode_tps": 76.65285117791166,
+     "wall_s": 3.04
+    },
+    {
+     "id": "no_robots:00350",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 219,
+     "decode_tps": 76.78265992882748,
+     "wall_s": 2.97
+    },
+    {
+     "id": "so:00282",
+     "source": "se_stackoverflow",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 356,
+     "decode_tps": 78.07972528492233,
+     "wall_s": 2.99
+    },
+    {
+     "id": "so:00223",
+     "source": "se_stackoverflow",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 917,
+     "decode_tps": 77.65129418173291,
+     "wall_s": 3.35
+    },
+    {
+     "id": "swebench:01397",
+     "source": "swebench",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 2695,
+     "decode_tps": 76.03577731680822,
+     "wall_s": 4.67
+    },
+    {
+     "id": "github_issues:00767",
+     "source": "github_issues",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 1580,
+     "decode_tps": 77.74163291025998,
+     "wall_s": 4.07
+    },
+    {
+     "id": "no_robots:00385",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 54,
+     "decode_tps": 77.07439538235292,
+     "wall_s": 2.88
+    },
+    {
+     "id": "oasst1:00271",
+     "source": "oasst1",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 9,
+     "decode_tps": 76.5952303880607,
+     "wall_s": 2.67
+    },
+    {
+     "id": "se_decision:00419",
+     "source": "se_devops",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 87,
+     "decode_tps": 77.07729109342851,
+     "wall_s": 2.85
+    },
+    {
+     "id": "se_decision:00502",
+     "source": "se_security",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 89,
+     "decode_tps": 77.26361023731188,
+     "wall_s": 2.88
+    },
+    {
+     "id": "no_robots:00140",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 136,
+     "decode_tps": 76.90099055431702,
+     "wall_s": 2.87
+    },
+    {
+     "id": "oasst1:00313",
+     "source": "oasst1",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 126,
+     "decode_tps": 76.99626355318023,
+     "wall_s": 2.9
+    },
+    {
+     "id": "se_decision:00457",
+     "source": "se_devops",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 145,
+     "decode_tps": 77.12209784507681,
+     "wall_s": 2.92
+    },
+    {
+     "id": "se_decision:00576",
+     "source": "se_security",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 167,
+     "decode_tps": 80.60498292713552,
+     "wall_s": 2.78
+    },
+    {
+     "id": "no_robots:00139",
+     "source": "no_robots",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1506,
+     "decode_tps": 75.4164389646043,
+     "wall_s": 3.81
+    },
+    {
+     "id": "se_decision:00435",
+     "source": "se_devops",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 483,
+     "decode_tps": 79.48100104523508,
+     "wall_s": 2.93
+    },
+    {
+     "id": "se_decision:00566",
+     "source": "se_security",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1022,
+     "decode_tps": 75.56770714665451,
+     "wall_s": 3.45
+    },
+    {
+     "id": "se_decision:00281",
+     "source": "se_softwareengineering",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 589,
+     "decode_tps": 78.67801949633416,
+     "wall_s": 3.25
+    }
+   ]
+  },
+  "PREV-BEST-mmap": {
+   "real_decode_tps": {
+    "n": 69,
+    "mean": 118.48,
+    "sd": 9.762,
+    "min": 100.72,
+    "max": 136.3
+   },
+   "real_prefill_tps": {
+    "n": 69,
+    "mean": 379.57,
+    "sd": 235.645,
+    "min": 80.52,
+    "max": 778.68
+   },
+   "real_wall_s": {
+    "n": 69,
+    "mean": 2.67,
+    "sd": 0.858,
+    "min": 1.61,
+    "max": 5.53
+   },
+   "control_decode_tps": {
+    "n": 3,
+    "mean": 103.81,
+    "sd": 3.966,
+    "min": 99.61,
+    "max": 107.5
+   },
+   "per_prompt": [
+    {
+     "id": "github_issues:00325",
+     "source": "github_issues",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 122,
+     "decode_tps": 115.78532121408182,
+     "wall_s": 2.35
+    },
+    {
+     "id": "humaneval:00083",
+     "source": "humaneval",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 47,
+     "decode_tps": 104.17948187722003,
+     "wall_s": 2.38
+    },
+    {
+     "id": "mbpp:00039",
+     "source": "mbpp",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 12,
+     "decode_tps": 108.34194896821987,
+     "wall_s": 1.95
+    },
+    {
+     "id": "no_robots:00535",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 95,
+     "decode_tps": 106.61494859445067,
+     "wall_s": 2.45
+    },
+    {
+     "id": "github_issues:00088",
+     "source": "github_issues",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 644,
+     "decode_tps": 112.23686377490361,
+     "wall_s": 3.15
+    },
+    {
+     "id": "humaneval:00129",
+     "source": "humaneval",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 399,
+     "decode_tps": 116.50385399432585,
+     "wall_s": 2.51
+    },
+    {
+     "id": "no_robots:00350",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 219,
+     "decode_tps": 113.92840601564885,
+     "wall_s": 2.45
+    },
+    {
+     "id": "so:00282",
+     "source": "se_stackoverflow",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 356,
+     "decode_tps": 119.31693155225332,
+     "wall_s": 2.45
+    },
+    {
+     "id": "so:00223",
+     "source": "se_stackoverflow",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 917,
+     "decode_tps": 117.45887463773676,
+     "wall_s": 3.08
+    },
+    {
+     "id": "swebench:01397",
+     "source": "swebench",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 2695,
+     "decode_tps": 101.29829803588201,
+     "wall_s": 5.53
+    },
+    {
+     "id": "github_issues:00767",
+     "source": "github_issues",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 1580,
+     "decode_tps": 128.44527005133938,
+     "wall_s": 4.25
+    },
+    {
+     "id": "no_robots:00385",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 54,
+     "decode_tps": 122.92950271000869,
+     "wall_s": 2.15
+    },
+    {
+     "id": "oasst1:00271",
+     "source": "oasst1",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 9,
+     "decode_tps": 133.6881331291958,
+     "wall_s": 1.61
+    },
+    {
+     "id": "se_decision:00419",
+     "source": "se_devops",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 87,
+     "decode_tps": 126.53825047833367,
+     "wall_s": 2.06
+    },
+    {
+     "id": "se_decision:00502",
+     "source": "se_security",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 89,
+     "decode_tps": 131.64814882194753,
+     "wall_s": 2.04
+    },
+    {
+     "id": "no_robots:00140",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 136,
+     "decode_tps": 136.29912932938092,
+     "wall_s": 1.97
+    },
+    {
+     "id": "oasst1:00313",
+     "source": "oasst1",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 126,
+     "decode_tps": 131.90172459847855,
+     "wall_s": 2.05
+    },
+    {
+     "id": "se_decision:00457",
+     "source": "se_devops",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 145,
+     "decode_tps": 120.66375982212101,
+     "wall_s": 2.25
+    },
+    {
+     "id": "se_decision:00576",
+     "source": "se_security",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 167,
+     "decode_tps": 115.00443836224433,
+     "wall_s": 2.27
+    },
+    {
+     "id": "no_robots:00139",
+     "source": "no_robots",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1506,
+     "decode_tps": 111.12203097568492,
+     "wall_s": 3.89
+    },
+    {
+     "id": "se_decision:00435",
+     "source": "se_devops",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 483,
+     "decode_tps": 126.93496082238548,
+     "wall_s": 2.25
+    },
+    {
+     "id": "se_decision:00566",
+     "source": "se_security",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1022,
+     "decode_tps": 127.60246510008459,
+     "wall_s": 2.97
+    },
+    {
+     "id": "se_decision:00281",
+     "source": "se_softwareengineering",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 589,
+     "decode_tps": 135.03582520799927,
+     "wall_s": 2.69
+    },
+    {
+     "id": "github_issues:00325",
+     "source": "github_issues",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 122,
+     "decode_tps": 112.81543677998665,
+     "wall_s": 2.39
+    },
+    {
+     "id": "humaneval:00083",
+     "source": "humaneval",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 47,
+     "decode_tps": 102.24376248825354,
+     "wall_s": 2.44
+    },
+    {
+     "id": "mbpp:00039",
+     "source": "mbpp",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 12,
+     "decode_tps": 109.323780229536,
+     "wall_s": 1.94
+    },
+    {
+     "id": "no_robots:00535",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 95,
+     "decode_tps": 101.30030909320443,
+     "wall_s": 2.53
+    },
+    {
+     "id": "github_issues:00088",
+     "source": "github_issues",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 644,
+     "decode_tps": 107.03775958673744,
+     "wall_s": 3.24
+    },
+    {
+     "id": "humaneval:00129",
+     "source": "humaneval",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 399,
+     "decode_tps": 119.10020097410798,
+     "wall_s": 2.46
+    },
+    {
+     "id": "no_robots:00350",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 219,
+     "decode_tps": 116.79370182626614,
+     "wall_s": 2.42
+    },
+    {
+     "id": "so:00282",
+     "source": "se_stackoverflow",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 356,
+     "decode_tps": 118.31385514697968,
+     "wall_s": 2.48
+    },
+    {
+     "id": "so:00223",
+     "source": "se_stackoverflow",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 917,
+     "decode_tps": 120.6477389158679,
+     "wall_s": 3.02
+    },
+    {
+     "id": "swebench:01397",
+     "source": "swebench",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 2695,
+     "decode_tps": 100.71930794194519,
+     "wall_s": 5.49
+    },
+    {
+     "id": "github_issues:00767",
+     "source": "github_issues",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 1580,
+     "decode_tps": 129.38604048157615,
+     "wall_s": 4.27
+    },
+    {
+     "id": "no_robots:00385",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 54,
+     "decode_tps": 122.79986152618632,
+     "wall_s": 2.17
+    },
+    {
+     "id": "oasst1:00271",
+     "source": "oasst1",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 9,
+     "decode_tps": 130.45099991674735,
+     "wall_s": 1.65
+    },
+    {
+     "id": "se_decision:00419",
+     "source": "se_devops",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 87,
+     "decode_tps": 127.44295006733982,
+     "wall_s": 2.05
+    },
+    {
+     "id": "se_decision:00502",
+     "source": "se_security",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 89,
+     "decode_tps": 115.40580508597442,
+     "wall_s": 2.28
+    },
+    {
+     "id": "no_robots:00140",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 136,
+     "decode_tps": 129.1411980539265,
+     "wall_s": 2.06
+    },
+    {
+     "id": "oasst1:00313",
+     "source": "oasst1",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 126,
+     "decode_tps": 125.22354605394807,
+     "wall_s": 2.15
+    },
+    {
+     "id": "se_decision:00457",
+     "source": "se_devops",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 145,
+     "decode_tps": 120.06025939049208,
+     "wall_s": 2.28
+    },
+    {
+     "id": "se_decision:00576",
+     "source": "se_security",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 167,
+     "decode_tps": 110.33488578398759,
+     "wall_s": 2.37
+    },
+    {
+     "id": "no_robots:00139",
+     "source": "no_robots",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1506,
+     "decode_tps": 105.24896139372895,
+     "wall_s": 4.03
+    },
+    {
+     "id": "se_decision:00435",
+     "source": "se_devops",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 483,
+     "decode_tps": 127.35755473494909,
+     "wall_s": 2.26
+    },
+    {
+     "id": "se_decision:00566",
+     "source": "se_security",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1022,
+     "decode_tps": 125.33625070777191,
+     "wall_s": 2.98
+    },
+    {
+     "id": "se_decision:00281",
+     "source": "se_softwareengineering",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 589,
+     "decode_tps": 126.55812770287457,
+     "wall_s": 2.82
+    },
+    {
+     "id": "github_issues:00325",
+     "source": "github_issues",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 122,
+     "decode_tps": 116.1037675964303,
+     "wall_s": 2.33
+    },
+    {
+     "id": "humaneval:00083",
+     "source": "humaneval",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 47,
+     "decode_tps": 103.23054545152729,
+     "wall_s": 2.43
+    },
+    {
+     "id": "mbpp:00039",
+     "source": "mbpp",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 12,
+     "decode_tps": 108.41200921774471,
+     "wall_s": 1.95
+    },
+    {
+     "id": "no_robots:00535",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 95,
+     "decode_tps": 104.16513995816645,
+     "wall_s": 2.49
+    },
+    {
+     "id": "github_issues:00088",
+     "source": "github_issues",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 644,
+     "decode_tps": 106.95830990820934,
+     "wall_s": 3.22
+    },
+    {
+     "id": "humaneval:00129",
+     "source": "humaneval",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 399,
+     "decode_tps": 119.00390739462773,
+     "wall_s": 2.48
+    },
+    {
+     "id": "no_robots:00350",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 219,
+     "decode_tps": 116.37113855416756,
+     "wall_s": 2.41
+    },
+    {
+     "id": "so:00282",
+     "source": "se_stackoverflow",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 356,
+     "decode_tps": 119.80864332063804,
+     "wall_s": 2.45
+    },
+    {
+     "id": "so:00223",
+     "source": "se_stackoverflow",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 917,
+     "decode_tps": 120.22215120321832,
+     "wall_s": 3.06
+    },
+    {
+     "id": "swebench:01397",
+     "source": "swebench",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 2695,
+     "decode_tps": 100.76551409147483,
+     "wall_s": 5.48
+    },
+    {
+     "id": "github_issues:00767",
+     "source": "github_issues",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 1580,
+     "decode_tps": 129.81353818214077,
+     "wall_s": 4.2
+    },
+    {
+     "id": "no_robots:00385",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 54,
+     "decode_tps": 124.09694528197757,
+     "wall_s": 2.12
+    },
+    {
+     "id": "oasst1:00271",
+     "source": "oasst1",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 9,
+     "decode_tps": 130.43612202266442,
+     "wall_s": 1.65
+    },
+    {
+     "id": "se_decision:00419",
+     "source": "se_devops",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 87,
+     "decode_tps": 125.47929623139643,
+     "wall_s": 2.08
+    },
+    {
+     "id": "se_decision:00502",
+     "source": "se_security",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 89,
+     "decode_tps": 112.03775278166094,
+     "wall_s": 2.32
+    },
+    {
+     "id": "no_robots:00140",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 136,
+     "decode_tps": 126.04254284179696,
+     "wall_s": 2.09
+    },
+    {
+     "id": "oasst1:00313",
+     "source": "oasst1",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 126,
+     "decode_tps": 133.66299059858855,
+     "wall_s": 2.04
+    },
+    {
+     "id": "se_decision:00457",
+     "source": "se_devops",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 145,
+     "decode_tps": 117.57372729394318,
+     "wall_s": 2.32
+    },
+    {
+     "id": "se_decision:00576",
+     "source": "se_security",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 167,
+     "decode_tps": 111.00859396180188,
+     "wall_s": 2.35
+    },
+    {
+     "id": "no_robots:00139",
+     "source": "no_robots",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1506,
+     "decode_tps": 109.07737532428595,
+     "wall_s": 3.94
+    },
+    {
+     "id": "se_decision:00435",
+     "source": "se_devops",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 483,
+     "decode_tps": 124.69140443876334,
+     "wall_s": 2.3
+    },
+    {
+     "id": "se_decision:00566",
+     "source": "se_security",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1022,
+     "decode_tps": 129.24209577423807,
+     "wall_s": 2.95
+    },
+    {
+     "id": "se_decision:00281",
+     "source": "se_softwareengineering",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 589,
+     "decode_tps": 120.4179167337336,
+     "wall_s": 2.9
+    }
+   ]
+  },
+  "NEW-BEST-nommap": {
+   "real_decode_tps": {
+    "n": 69,
+    "mean": 126.25,
+    "sd": 7.833,
+    "min": 108.71,
+    "max": 138.06
+   },
+   "real_prefill_tps": {
+    "n": 69,
+    "mean": 795.35,
+    "sd": 487.994,
+    "min": 80.9,
+    "max": 1572.08
+   },
+   "real_wall_s": {
+    "n": 69,
+    "mean": 2.1,
+    "sd": 0.49,
+    "min": 1.55,
+    "max": 3.8
+   },
+   "control_decode_tps": {
+    "n": 3,
+    "mean": 119.15,
+    "sd": 2.131,
+    "min": 116.7,
+    "max": 120.56
+   },
+   "per_prompt": [
+    {
+     "id": "github_issues:00325",
+     "source": "github_issues",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 122,
+     "decode_tps": 128.12992760981024,
+     "wall_s": 1.89
+    },
+    {
+     "id": "humaneval:00083",
+     "source": "humaneval",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 47,
+     "decode_tps": 115.6608915652987,
+     "wall_s": 1.95
+    },
+    {
+     "id": "mbpp:00039",
+     "source": "mbpp",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 12,
+     "decode_tps": 120.47419612230492,
+     "wall_s": 1.78
+    },
+    {
+     "id": "no_robots:00535",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 95,
+     "decode_tps": 113.25318346731166,
+     "wall_s": 2.05
+    },
+    {
+     "id": "github_issues:00088",
+     "source": "github_issues",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 644,
+     "decode_tps": 112.64371980129421,
+     "wall_s": 2.48
+    },
+    {
+     "id": "humaneval:00129",
+     "source": "humaneval",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 399,
+     "decode_tps": 122.59046591153404,
+     "wall_s": 2.03
+    },
+    {
+     "id": "no_robots:00350",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 219,
+     "decode_tps": 126.33051745360846,
+     "wall_s": 1.91
+    },
+    {
+     "id": "so:00282",
+     "source": "se_stackoverflow",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 356,
+     "decode_tps": 128.9525746126725,
+     "wall_s": 1.93
+    },
+    {
+     "id": "so:00223",
+     "source": "se_stackoverflow",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 917,
+     "decode_tps": 114.78903908884037,
+     "wall_s": 2.45
+    },
+    {
+     "id": "swebench:01397",
+     "source": "swebench",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 2695,
+     "decode_tps": 108.7111501038765,
+     "wall_s": 3.8
+    },
+    {
+     "id": "github_issues:00767",
+     "source": "github_issues",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 1580,
+     "decode_tps": 130.63674581896768,
+     "wall_s": 2.98
+    },
+    {
+     "id": "no_robots:00385",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 54,
+     "decode_tps": 132.83439222591724,
+     "wall_s": 1.76
+    },
+    {
+     "id": "oasst1:00271",
+     "source": "oasst1",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 9,
+     "decode_tps": 135.48078317423986,
+     "wall_s": 1.58
+    },
+    {
+     "id": "se_decision:00419",
+     "source": "se_devops",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 87,
+     "decode_tps": 132.91841414305358,
+     "wall_s": 1.72
+    },
+    {
+     "id": "se_decision:00502",
+     "source": "se_security",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 89,
+     "decode_tps": 126.89036353770335,
+     "wall_s": 1.85
+    },
+    {
+     "id": "no_robots:00140",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 136,
+     "decode_tps": 125.96913945986459,
+     "wall_s": 1.82
+    },
+    {
+     "id": "oasst1:00313",
+     "source": "oasst1",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 126,
+     "decode_tps": 129.89988570115585,
+     "wall_s": 1.8
+    },
+    {
+     "id": "se_decision:00457",
+     "source": "se_devops",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 145,
+     "decode_tps": 133.7734187511344,
+     "wall_s": 1.81
+    },
+    {
+     "id": "se_decision:00576",
+     "source": "se_security",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 167,
+     "decode_tps": 132.02651410859215,
+     "wall_s": 1.78
+    },
+    {
+     "id": "no_robots:00139",
+     "source": "no_robots",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1506,
+     "decode_tps": 111.35570818313369,
+     "wall_s": 2.93
+    },
+    {
+     "id": "se_decision:00435",
+     "source": "se_devops",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 483,
+     "decode_tps": 125.19242831160709,
+     "wall_s": 1.97
+    },
+    {
+     "id": "se_decision:00566",
+     "source": "se_security",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1022,
+     "decode_tps": 131.9817692719912,
+     "wall_s": 2.22
+    },
+    {
+     "id": "se_decision:00281",
+     "source": "se_softwareengineering",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 589,
+     "decode_tps": 130.42287158393663,
+     "wall_s": 2.14
+    },
+    {
+     "id": "github_issues:00325",
+     "source": "github_issues",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 122,
+     "decode_tps": 125.58437755586296,
+     "wall_s": 1.88
+    },
+    {
+     "id": "humaneval:00083",
+     "source": "humaneval",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 47,
+     "decode_tps": 115.75501352995788,
+     "wall_s": 1.94
+    },
+    {
+     "id": "mbpp:00039",
+     "source": "mbpp",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 12,
+     "decode_tps": 119.47008114960236,
+     "wall_s": 1.79
+    },
+    {
+     "id": "no_robots:00535",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 95,
+     "decode_tps": 117.65811861712099,
+     "wall_s": 1.95
+    },
+    {
+     "id": "github_issues:00088",
+     "source": "github_issues",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 644,
+     "decode_tps": 118.74075134851304,
+     "wall_s": 2.34
+    },
+    {
+     "id": "humaneval:00129",
+     "source": "humaneval",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 399,
+     "decode_tps": 127.66255003056844,
+     "wall_s": 1.95
+    },
+    {
+     "id": "no_robots:00350",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 219,
+     "decode_tps": 128.74642389016054,
+     "wall_s": 1.87
+    },
+    {
+     "id": "so:00282",
+     "source": "se_stackoverflow",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 356,
+     "decode_tps": 129.91107945661915,
+     "wall_s": 1.9
+    },
+    {
+     "id": "so:00223",
+     "source": "se_stackoverflow",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 917,
+     "decode_tps": 122.19391498864947,
+     "wall_s": 2.32
+    },
+    {
+     "id": "swebench:01397",
+     "source": "swebench",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 2695,
+     "decode_tps": 109.17773257051566,
+     "wall_s": 3.61
+    },
+    {
+     "id": "github_issues:00767",
+     "source": "github_issues",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 1580,
+     "decode_tps": 130.43919992920888,
+     "wall_s": 2.87
+    },
+    {
+     "id": "no_robots:00385",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 54,
+     "decode_tps": 130.19512913197795,
+     "wall_s": 1.8
+    },
+    {
+     "id": "oasst1:00271",
+     "source": "oasst1",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 9,
+     "decode_tps": 136.55661850129454,
+     "wall_s": 1.58
+    },
+    {
+     "id": "se_decision:00419",
+     "source": "se_devops",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 87,
+     "decode_tps": 133.4155727483608,
+     "wall_s": 1.72
+    },
+    {
+     "id": "se_decision:00502",
+     "source": "se_security",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 89,
+     "decode_tps": 127.50754152645109,
+     "wall_s": 1.81
+    },
+    {
+     "id": "no_robots:00140",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 136,
+     "decode_tps": 135.8833888361212,
+     "wall_s": 1.71
+    },
+    {
+     "id": "oasst1:00313",
+     "source": "oasst1",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 126,
+     "decode_tps": 130.7478976854994,
+     "wall_s": 1.79
+    },
+    {
+     "id": "se_decision:00457",
+     "source": "se_devops",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 145,
+     "decode_tps": 135.54916484004517,
+     "wall_s": 1.75
+    },
+    {
+     "id": "se_decision:00576",
+     "source": "se_security",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 167,
+     "decode_tps": 132.3345070539612,
+     "wall_s": 1.78
+    },
+    {
+     "id": "no_robots:00139",
+     "source": "no_robots",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1506,
+     "decode_tps": 113.40924724184721,
+     "wall_s": 2.87
+    },
+    {
+     "id": "se_decision:00435",
+     "source": "se_devops",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 483,
+     "decode_tps": 127.68097976866004,
+     "wall_s": 2.27
+    },
+    {
+     "id": "se_decision:00566",
+     "source": "se_security",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1022,
+     "decode_tps": 127.65427885596108,
+     "wall_s": 2.8
+    },
+    {
+     "id": "se_decision:00281",
+     "source": "se_softwareengineering",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 589,
+     "decode_tps": 126.50510883571437,
+     "wall_s": 2.22
+    },
+    {
+     "id": "github_issues:00325",
+     "source": "github_issues",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 122,
+     "decode_tps": 123.89760703290135,
+     "wall_s": 1.95
+    },
+    {
+     "id": "humaneval:00083",
+     "source": "humaneval",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 47,
+     "decode_tps": 115.95668930250012,
+     "wall_s": 1.95
+    },
+    {
+     "id": "mbpp:00039",
+     "source": "mbpp",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 12,
+     "decode_tps": 118.37621149724494,
+     "wall_s": 1.81
+    },
+    {
+     "id": "no_robots:00535",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "code",
+     "n_prompt": 95,
+     "decode_tps": 118.4532975552787,
+     "wall_s": 1.97
+    },
+    {
+     "id": "github_issues:00088",
+     "source": "github_issues",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 644,
+     "decode_tps": 122.47329589794465,
+     "wall_s": 2.31
+    },
+    {
+     "id": "humaneval:00129",
+     "source": "humaneval",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 399,
+     "decode_tps": 129.53401602316248,
+     "wall_s": 1.94
+    },
+    {
+     "id": "no_robots:00350",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 219,
+     "decode_tps": 127.85308331523687,
+     "wall_s": 1.89
+    },
+    {
+     "id": "so:00282",
+     "source": "se_stackoverflow",
+     "band": "medium",
+     "domain": "code",
+     "n_prompt": 356,
+     "decode_tps": 129.10290994066457,
+     "wall_s": 1.92
+    },
+    {
+     "id": "so:00223",
+     "source": "se_stackoverflow",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 917,
+     "decode_tps": 124.26681020836234,
+     "wall_s": 2.31
+    },
+    {
+     "id": "swebench:01397",
+     "source": "swebench",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 2695,
+     "decode_tps": 110.6923220690453,
+     "wall_s": 3.59
+    },
+    {
+     "id": "github_issues:00767",
+     "source": "github_issues",
+     "band": "long",
+     "domain": "code",
+     "n_prompt": 1580,
+     "decode_tps": 133.32591889362266,
+     "wall_s": 2.83
+    },
+    {
+     "id": "no_robots:00385",
+     "source": "no_robots",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 54,
+     "decode_tps": 135.31201659102115,
+     "wall_s": 1.74
+    },
+    {
+     "id": "oasst1:00271",
+     "source": "oasst1",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 9,
+     "decode_tps": 138.05667538713104,
+     "wall_s": 1.55
+    },
+    {
+     "id": "se_decision:00419",
+     "source": "se_devops",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 87,
+     "decode_tps": 134.57120811809267,
+     "wall_s": 1.7
+    },
+    {
+     "id": "se_decision:00502",
+     "source": "se_security",
+     "band": "short",
+     "domain": "decision",
+     "n_prompt": 89,
+     "decode_tps": 129.35618322555817,
+     "wall_s": 1.79
+    },
+    {
+     "id": "no_robots:00140",
+     "source": "no_robots",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 136,
+     "decode_tps": 137.88410944533865,
+     "wall_s": 1.68
+    },
+    {
+     "id": "oasst1:00313",
+     "source": "oasst1",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 126,
+     "decode_tps": 135.9707560383998,
+     "wall_s": 1.73
+    },
+    {
+     "id": "se_decision:00457",
+     "source": "se_devops",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 145,
+     "decode_tps": 137.1475514682369,
+     "wall_s": 1.73
+    },
+    {
+     "id": "se_decision:00576",
+     "source": "se_security",
+     "band": "medium",
+     "domain": "decision",
+     "n_prompt": 167,
+     "decode_tps": 137.98545397561054,
+     "wall_s": 1.71
+    },
+    {
+     "id": "no_robots:00139",
+     "source": "no_robots",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1506,
+     "decode_tps": 117.80006310294837,
+     "wall_s": 2.73
+    },
+    {
+     "id": "se_decision:00435",
+     "source": "se_devops",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 483,
+     "decode_tps": 127.14192616823622,
+     "wall_s": 2.08
+    },
+    {
+     "id": "se_decision:00566",
+     "source": "se_security",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 1022,
+     "decode_tps": 126.59178031300613,
+     "wall_s": 2.57
+    },
+    {
+     "id": "se_decision:00281",
+     "source": "se_softwareengineering",
+     "band": "long",
+     "domain": "decision",
+     "n_prompt": 589,
+     "decode_tps": 125.51308994305869,
+     "wall_s": 2.24
+    }
+   ]
+  }
+ }
+}

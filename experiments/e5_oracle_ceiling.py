@@ -57,7 +57,14 @@ def replay(ix, rows, depth, cost, oracle_ids=None, capacity=66, max_inserts=2,
 
 
 def main():
-    ix = Index(os.path.join(ROOT, "data", "index-v3.npz"))
+    # Parameterised so the ceiling can be recomputed on the real-prompt corpus.
+    # The v3 answer was "-0.4 tok/s for a perfect predictor"; whether that holds
+    # on real traffic is a question about the data, not about the arithmetic.
+    index = os.environ.get("INDEX", os.path.join(ROOT, "data", "index-v3.npz"))
+    if len(sys.argv) > 1:
+        index = sys.argv[1]
+    print(f"index: {index}")
+    ix = Index(index)
     d = ix.d
     rows = ix.rows(1)
     rows = rows[np.lexsort((d["layer"][rows], d["pos"][rows], d["prompt"][rows]))]
