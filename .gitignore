@@ -1,12 +1,14 @@
 artifacts/*.bin
-artifacts/ckpt/
+artifacts/ckpt/*
+!artifacts/ckpt/FRESH_SUPERVISED-linearctx-lr1e2.pt
+!artifacts/ckpt/FRESH_RL-policy.pt
 cpp/build/
 data/
 data/corpus-v3/
 data/index-v3.npz
 *.gguf
-models/
-models/*.bin
+models/*
+!models/predictor-fresh.bin
 *.npz
 *.out
 *.pyc
