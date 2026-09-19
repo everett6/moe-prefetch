@@ -1,0 +1,29 @@
+{
+ "slope_ms": 0.3208,
+ "hidden": 2048,
+ "iters": 2000,
+ "fixed_ms": 0.010540001312620007,
+ "per_expert_ms": 0.038782499835922496,
+ "rows": [
+  {
+   "variant": "d2h_sync",
+   "median_ms": 0.005019001036998816,
+   "mean_ms": 0.005104384487822244
+  },
+  {
+   "variant": "round_trip",
+   "median_ms": 0.010540001312620007,
+   "mean_ms": 0.011429020523792133
+  },
+  {
+   "variant": "round_trip_ev",
+   "median_ms": 0.011973001164733432,
+   "mean_ms": 0.012491939004576125
+  },
+  {
+   "variant": "launch_only",
+   "median_ms": 0.0060109996411483735,
+   "mean_ms": 0.0063965164836190525
+  }
+ ]
+}

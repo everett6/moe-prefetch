@@ -55,6 +55,71 @@ The honest reading recorded there: *"the exploitable structure is almost entirel
 'experts recur as themselves across adjacent tokens' — not richer cross-expert
 transition patterns."*
 
+## VERDICT (2026-09-18): **129 tok/s at Q4_K_M — it clears the bar**
+
+| | tok/s | |
+|---|---|---|
+| Q4_K_M today (`--n-cpu-moe 22`) | 77.9 | the thing being fixed |
+| the bar (`ud-q3_k_xl`, Q4_K_M-equal accuracy) | 110 | must beat this to be worth building |
+| LRU cache alone | 113.1 | what PR #27861 already gets you |
+| **LRU + trained probe, top-12 prefetch** | **127.4** | |
+| **LRU + trained probe, top-16 prefetch** | **129.1** | **1.66x, +19 over the bar** |
+
+### How the range collapsed
+
+Milestone 3 and 4 both ended at a *range* — 91 to 126 tok/s — because of one
+unmeasured constant: whether a layer with a single missing expert pays the whole
+CPU round trip or just that expert's share. Milestone 3 said measuring it needed
+a llama.cpp CUDA build and root.
+
+It did not. The cost decomposes as `FIXED + m x PER_EXPERT`, and `FIXED` is a
+property of the PCIe round trip and its synchronisation stall, not of llama.cpp's
+graph. `experiments/m5a_fixed_hop_cost.py` measured it directly:
+
+```
+FIXED      =  10.5 us    (3% of a full host-resident layer)
+PER_EXPERT =  38.8 us    derived from AI2's measured SLOPE = 321 us
+```
+
+**3%.** The pessimistic model — "any miss costs a whole layer" — is simply wrong,
+and cost scales almost linearly with misses. That is what turns 91–126 into 129.
+
+**The verdict is robust:** `FIXED` would have to be **121 us, twelve times the
+measured value**, before the answer drops back below the bar.
+
+### Prefetch depth
+
+The engine demands ~8–10 GB/s of the 53.66 available, so there is slack to spend
+on prefetching more than the 8 experts a layer will use:
+
+| top-P | expert hit | all-8 on time | GB moved | tok/s |
+|---|---|---|---|---|
+| 8 | 86.5% | 66.9% | 48.3 | 124.2 |
+| 12 | 87.8% | 69.3% | 54.0 | 127.4 |
+| **16** | **88.5%** | 69.2% | 64.2 | **129.1** |
+| 24 | 88.0% | 65.7% | 111.6 | 127.6 |
+
+24 is worse than 16 on every axis that matters — it thrashes the cache and pushes
+lateness from 5.0% to 6.7% while more than doubling traffic. 12–16 is the range.
+
+### What the predictor is actually worth
+
+**+16 tok/s over the LRU cache alone** (129.1 vs 113.1). That is the honest
+measure of this project's novel part: LRU caching is most of the win and
+llama.cpp PR #27861 already implements it. The trained probe is a ~14%
+improvement on top of someone else's mechanism — real, measured on real copies,
+and smaller than it looked at milestone 2.
+
+### Still not measured
+
+The integration itself. Everything above runs against a PyTorch harness with real
+copies, real CUDA events and real deadlines, replaying real traces — but the
+expert weights are stand-in bytes and llama.cpp's MoE graph is untouched. Putting
+this into llama.cpp adds graph-split and backend-scheduling overhead on top of
+`FIXED`, which is why the robustness margin above matters: it has 12x of room.
+
+---
+
 ## Milestone 4 (2026-09-18): the prefetcher is built and it works
 
 `src/prefetch_engine.py` and `src/predictor.py` are a working async prefetcher —
