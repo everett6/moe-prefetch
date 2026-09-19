@@ -157,6 +157,34 @@ context slots by default, so `-np 1` looked like free VRAM. It is not: VRAM is
 identical at 11,132 MiB either way, and 84/96/104 slots still fall back to no
 cache. The KV cache was never the constraint.
 
+## Why this stopped: the ceiling, not the effort
+
+Before concluding that more data and more training cannot help, it is worth
+knowing what they are aiming at. `e5_oracle_ceiling.py` replays the same traces
+through the same engine with a **perfect** predictor -- at each layer it fetches
+exactly the experts the next token will use there, nothing else, 100% precision:
+
+| upload cost | depth 0 | oracle d1 | oracle d2 | oracle d3 | best gain |
+|---|---|---|---|---|---|
+| **141.6 µs (measured)** | 130.2 | 129.9 | 127.2 | 124.3 | **−0.4** |
+| 70.8 µs | 152.0 | 156.4 | 156.5 | 155.7 | +4.6 |
+| 35.4 µs | 165.8 | 174.2 | 176.9 | 178.2 | +12.4 |
+| 0 µs | 182.4 | 196.6 | 203.4 | 208.2 | +25.9 |
+
+**At the measured upload cost a flawless predictor is worth −0.4 tok/s.** Not a
+small gain: none. The reason is that its prefetches largely duplicate what demand
+admission performs anyway — the experts the next token needs are mostly the ones
+this token just missed — while consuming the same slot budget a beat earlier.
+
+So the plateau is structural. It is not that this predictor is 14 points short of
+break-even; it is that closing those 14 points returns nothing until uploads get
+cheaper. That bounds every remaining avenue on the model side — more data, deeper
+architectures, longer training, targeted collection of hard rows — at −0.4 tok/s,
+and it is the reason experimentation stopped here rather than continuing.
+
+The prize only exists on the other lever. Halve the upload cost and prediction
+becomes worth +4.6; quarter it and +12.4.
+
 ## The optimisation that is still on the table
 
 `ggml_backend_cuda_buffer_set_tensor` does `cudaMemcpyAsync` from **pageable**

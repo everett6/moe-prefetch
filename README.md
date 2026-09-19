@@ -38,6 +38,14 @@ The freshly trained model reaches 61% at the depth the engine can afford. Every
 number this project reported for a year was a *recall*; recall is not the
 quantity that decides.
 
+And the gap is not the point. Replaying the same traces with a **perfect**
+predictor — 100% precision, fetching exactly what the next token will use — is
+worth **−0.4 tok/s** at the measured upload cost. Its prefetches duplicate what
+demand admission does anyway while spending the same slot budget a beat earlier.
+So the limit is not prediction quality; there is no headroom above it to reach.
+Halve the cost of an upload and a perfect predictor becomes worth +4.6; quarter
+it, +12.4. That is the lever, and it is a memory-bandwidth problem.
+
 ## What did make it fast
 
 Fixing the cache it was supposed to ride on. [llama.cpp PR #27861](https://github.com/ggml-org/llama.cpp/pull/27861)
