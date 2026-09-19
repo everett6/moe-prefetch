@@ -55,7 +55,64 @@ The honest reading recorded there: *"the exploitable structure is almost entirel
 'experts recur as themselves across adjacent tokens' — not richer cross-expert
 transition patterns."*
 
-## Correction (measured 2026-09-18): the mechanism below does not work
+## Milestone 1 result (2026-09-18): green light, via a different mechanism
+
+**A prefetchable predictor reaches 51.3% recall@8, against the 45.8% bar that
+beat every trained predictor in AI2.** The route there was not the one this repo
+originally proposed, and the first two attempts both failed:
+
+| predictor | recall@8 | prefetchable? |
+|---|---|---|
+| **per-layer probe on `h_L` + repeat prior (ensemble)** | **51.3%** | **yes** |
+| naive-repeat, same layer, previous token | 45.8% | no — needs `h_L(t+1)` |
+| per-layer ridge probe on `h_L` alone | 40.6% | yes |
+| *one* probe shared across all 47 layer transitions | 9.4% | yes |
+| cross-layer expert IDs (`E_L` → `E_{L+1}`) | 6.5% | yes |
+| random (8 of 128) | 6.2% | — |
+
+Three things made the difference, in order of how much they mattered:
+
+1. **Predict from the hidden state, not from expert IDs.** `E_L → E_{L+1}` is at
+   the random floor. `h_L → E_{L+1}` is not — 2048 floats carry what 8 integers
+   cannot.
+2. **One probe per layer transition.** A single shared probe scores 9.4%; giving
+   each transition its own scores 40.6%. Routing is layer-specific and a shared
+   probe cannot represent 47 different gates at once. This was the difference
+   between concluding "no signal" and finding it.
+3. **Ensemble with the repeat prior.** The probe and naive-repeat are
+   *anti-correlated by depth* — where one is weak the other is strong:
+
+   | layers | probe | repeat |
+   |---|---|---|
+   | 0–15 | 44.4% | 38.8% |
+   | 16–31 | 36.6% | 44.8% |
+   | 32–46 | 40.6% | 40.5% |
+
+   At layer 0 the probe gets 48.7% where repeat gets 21.9%; at layer 46, 61.4%
+   against 27.2%. The probe wins on 24 of 47 layers. Combining them beats both
+   by ~10 points — and layer 0 being the probe's *strongest* region is convenient,
+   because it is the layer with the least prefetch budget.
+
+**Both ensemble inputs are available before layer L+1 computes**: `h_L` is in hand
+one layer early, and the repeat prior `E_{L+1}(t-1)` is known from the previous
+token. That is what makes this prefetchable where naive-repeat is not.
+
+### Caveats, stated because they bound the number
+
+- **51.3% is optimistic.** The ridge strength and the ensemble weight were both
+  chosen by their held-out score, so that figure is a ceiling, not a clean
+  generalisation estimate. A proper validation split is the first job of
+  milestone 2.
+- **Small data:** 8 prompts, 557 token positions, 2 prompts held out. The
+  qualitative finding — that the probe is prefetchable and complementary to
+  repeat — rests on a structural pattern across 47 layers rather than on the
+  headline average, which is why it is believable at this scale and the exact
+  percentage is not.
+- **Linear probes only.** No nonlinearity has been tried yet.
+
+---
+
+## Correction (2026-09-18): the originally proposed mechanism does not work
 
 **The token-predictor design described in the next section has a dependency flaw,
 and the cross-layer alternative has no signal. Both are recorded here rather than
