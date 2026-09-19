@@ -12,6 +12,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 INDEX=${INDEX:-data/index-v4.npz}
+REPLAY_INDEX=${REPLAY_INDEX:-data/index-v4-replay.npz}
 CKPT=${CKPT:-artifacts/ckpt/FRESH_REAL-linearctx-lr1e2.pt}
 
 if [ "${1:-}" = "--remeasure" ]; then
@@ -19,8 +20,15 @@ if [ "${1:-}" = "--remeasure" ]; then
   python3 -u experiments/e1_upload_cost.py
 fi
 
+# E5 replays a trace in position order, so it uses the CONTIGUOUS replay corpus,
+# not the subsampled training corpus. Replaying over gaps would manufacture
+# cache misses the real sequence never had.
+if [ ! -f "$REPLAY_INDEX" ]; then
+  [ -d data/corpus-v4-replay ] || ./experiments/r6_replay_capture.sh
+  python3 -u experiments/build_index.py data/corpus-v4-replay "$REPLAY_INDEX"
+fi
 echo "== E5: the ceiling -- a perfect predictor on real traces =="
-python3 -u experiments/e5_oracle_ceiling.py "$INDEX"
+python3 -u experiments/e5_oracle_ceiling.py "$REPLAY_INDEX"
 
 echo
 echo "== E2: precision against break-even, real traces, LOCKED TEST =="
