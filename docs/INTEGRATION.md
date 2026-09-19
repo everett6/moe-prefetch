@@ -5,16 +5,59 @@ against a 110 bar, 1.66x over today's 77.9). This is what remains, written so
 that whoever has root can treat it as a defined job rather than a research
 question.
 
-## What has to be true first
+## Correction: this never needed root, and it is already done
 
-| | |
-|---|---|
-| CUDA toolkit | **12.8+ or 13.x**, from NVIDIA. Ubuntu's `nvidia-cuda-toolkit` is 12.4 and will not target this card — the RTX 5070 is `sm_120`. Several GB, needs root. |
-| driver | already fine: 595.91.07 reports CUDA 13.2 |
-| build tools | already present: cmake, ninja, g++, git |
-| disk | ~499 GB free, ample |
+This document said three times that the CUDA toolkit needs a root install.
+**That was wrong.** `cuda-nvcc` is available through conda, which is
+user-writable here, and the whole toolchain installs into an isolated
+environment without touching the system:
 
-Build llama.cpp with `-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120`.
+```bash
+conda create -y -n cudabuild -c pkgs/main \
+    cuda-nvcc=13.2.86 cuda-cudart-dev cuda-cccl libcublas-dev cuda-nvtx
+```
+
+13.2.86 matches the driver (595.91.07 reports CUDA 13.2) and targets `sm_120`.
+Verified by compiling and running a trivial kernel on the 5070 before anything
+larger was attempted.
+
+(PyPI's `nvidia-cuda-nvcc-cu12` looks like an alternative and is not one — it
+ships `ptxas` and `nvvm` for JIT use, not the `nvcc` compiler driver.)
+
+### The build, which works
+
+```bash
+export CUDA_HOME=$HOME/miniconda3/envs/cudabuild
+export PATH=$CUDA_HOME/bin:$PATH
+cmake -B build -G Ninja -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 \
+  -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_COMPILER=$CUDA_HOME/bin/nvcc \
+  -DCMAKE_EXE_LINKER_FLAGS="-L$CUDA_HOME/lib -Wl,-rpath,$CUDA_HOME/lib" \
+  -DCMAKE_SHARED_LINKER_FLAGS="-L$CUDA_HOME/lib -Wl,-rpath,$CUDA_HOME/lib"
+cmake --build build -j 16
+```
+
+The two linker flags are not optional. Without them `libggml-cuda.so` compiles
+fine and then every executable fails to link, because `libcudart.so.13` and
+`libcublas.so.13` live in the conda env and are not on the linker's search path.
+The errors look like missing CUDA symbols and read as a broken toolchain; they
+are a missing `-L`.
+
+Run anything built this way with
+`LD_LIBRARY_PATH=$CUDA_HOME/lib:$LD_LIBRARY_PATH`.
+
+### Baseline confirmed on the new binary
+
+```
+| qwen3moe 30B.A3B Q4_K_M | 17.28 GiB | CUDA | ngl 999 | n_cpu_moe 22 | tg128 | 78.23 ± 0.48 t/s |
+```
+
+**78.23 tok/s against the 77.9 this project has used as its baseline throughout**
+— an independent build reproducing the number the whole verdict rests on. The
+110 bar and the 133 projection are measured against a figure that now has two
+independent sources.
+
+## What remains
 
 ## The shape of the change
 
