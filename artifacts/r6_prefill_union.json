@@ -1,0 +1,36 @@
+{
+ "corpus": "/home/everett/moe-prefetch/data/corpus-v4-replay",
+ "n_expert": 128,
+ "windows": {
+  "1": {
+   "prefill_union": 8.0,
+   "decode_union": 8.0,
+   "prefill_n": 687640,
+   "decode_n": 242688
+  },
+  "8": {
+   "prefill_union": 63.99816436035018,
+   "decode_union": 29.00029667721519,
+   "prefill_n": 84984,
+   "decode_n": 30336
+  },
+  "32": {
+   "prefill_union": 128.0,
+   "decode_union": 52.83966244725738,
+   "prefill_n": 20586,
+   "decode_n": 7584
+  },
+  "128": {
+   "prefill_union": 128.0,
+   "decode_union": 75.23076923076923,
+   "prefill_n": 4653,
+   "decode_n": 1248
+  },
+  "512": {
+   "prefill_union": 128.0,
+   "decode_union": NaN,
+   "prefill_n": 705,
+   "decode_n": 0
+  }
+ }
+}

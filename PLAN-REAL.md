@@ -165,3 +165,45 @@ for the whole batch is already computed and the misses are unavoidable demand
 misses, not mispredictions. And the v3 corpus turns out to have contained almost
 no human text at all by row count: 0.15%. It was 616 short prompts and six
 million rows of the model talking to itself.
+
+### One assertion in that correction is not yet measured
+
+I wrote that a predictor "cannot help" during prefill because the routing is
+already known. That is not quite right, and I should not have stated it as
+settled: layer L+1's routing is computed at layer L+1, not before, so predicting
+it from layer L is as applicable in prefill as in decode.
+
+The real argument is different and is a claim about batch size, not about
+knowledge: prefill processes many tokens at once, so the experts needed at one
+layer are the UNION over the batch. At n_batch 512 that union plausibly
+approaches all 128 experts, and a prefetcher with nothing to discriminate
+between is just "load everything".
+
+Plausible is not measured. R6 computes the per-layer expert union over a batch
+window on the contiguous replay corpus, where the positions are actually
+adjacent and the union can be computed exactly. If the union is small, prefill
+prediction is worth pricing and I will price it.
+
+### The prefill assertion, now measured
+
+Measured on the contiguous replay corpus, distinct experts used at one layer
+within a window of w consecutive positions:
+
+| window | prefill union | decode union |
+|---|---|---|
+| 1 | 8.0 (6.2%) | 8.0 (6.2%) |
+| 8 | 64.0 (50.0%) | 29.0 (22.7%) |
+| 32 | **128.0 (100%)** | 52.8 (41.3%) |
+| 128 | **128.0 (100%)** | 75.2 (58.8%) |
+| 512 | **128.0 (100%)** | n/a |
+
+At any prefill batch of 32 or more, every layer uses every expert. The
+assertion holds, and now on evidence: prefill's 94% miss rate is unavoidable
+demand traffic, because there is no subset to choose. 48% of the corpus is in a
+regime where prefetching is definitionally useless, and the predictor's entire
+opportunity is the decode phase and its 5.9% miss rate.
+
+The decode column is worth keeping for a different reason: over 128 consecutive
+decode tokens a layer draws on about 75 distinct experts, against 66 cache
+slots. The cache is slightly smaller than the working set it is chasing, which
+is a statement about cache size rather than about prediction.
