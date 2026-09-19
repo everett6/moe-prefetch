@@ -132,3 +132,36 @@ are computed on the full trajectory and are fine, but the *replay* is not.
 R6 therefore needs a small dedicated corpus captured with subsampling OFF, used
 only for the economics simulation. Noted here so it is not discovered as a
 surprising result later.
+
+## Correction: the "13x more misses" claim was mine and it was wrong
+
+Two hours ago I recorded that real prompts miss a 66-slot LRU 13x more often
+than synthetic ones, and called it evidence that E5's ceiling would not survive.
+Splitting the same rows by phase shows why that comparison was invalid.
+
+| warm rows | v3 synthetic | v4 real |
+|---|---|---|
+| prefill rows | 9,870 (0.15%) | 561,423 (48%) |
+| prefill miss rate | 68.1% | 94.1% |
+| **decode rows** | 6,414,288 (99.8%) | 605,280 (52%) |
+| **decode miss rate** | **3.6%** | **6.0%** |
+| decode repeat (of 8) | 3.638 | 3.556 |
+
+The v3 corpus is 99.8% *decode* rows — the model's own generated continuation of
+a 14-token prompt. The v4 corpus is 48% *prefill* rows, because real prompts are
+long. Prefill misses far more than decode in both corpora. So comparing the two
+pooled figures was comparing a prefill-heavy corpus with a decode-only one, and
+most of the 13x was that, not a property of real traffic.
+
+In the phase the prefetcher actually runs in, real workloads miss **6.0%**
+against synthetic **3.6%** — 1.7x, not 13x. That is a real difference and a much
+smaller one, and it makes E5 likely to survive rather than likely to flip. The
+earlier prediction is withdrawn; R6 still decides it.
+
+Two things worth keeping from the wrong turn. Prefill on real prompts misses
+94% of expert lookups, and prefill is now half the work rather than a rounding
+error -- but a predictor cannot help there, because during prefill the routing
+for the whole batch is already computed and the misses are unavoidable demand
+misses, not mispredictions. And the v3 corpus turns out to have contained almost
+no human text at all by row count: 0.15%. It was 616 short prompts and six
+million rows of the model talking to itself.

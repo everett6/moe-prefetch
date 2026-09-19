@@ -34,10 +34,27 @@ def main():
     corpus = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "data", "corpus-v4")
     m = json.load(open(os.path.join(corpus, "manifest.json")))
     agg = {"cold": {}, "warm": {}}
-    for k in agg:
+    for k in list(agg):
         agg[k] = {"n": 0, "miss66": 0.0, "miss32": 0.0, "repeat": 0.0}
     hist = np.zeros(m["n_expert"], dtype=np.int64)
     by_domain = {}
+
+    # Phase split. The prefetcher runs during DECODE, so decode-phase routing is
+    # the only regime in which a predictor could ever be paid. Prefill is the
+    # human's text; decode is the model's own continuation, and the two are
+    # different kinds of text with different routing. A figure pooled over both
+    # describes neither -- and on the real corpus prefill is a large share of
+    # rows, where on the synthetic one it was almost none, so pooling also makes
+    # the two corpora incomparable.
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(
+        "/home/everett/AI2/models/qwen3-30b-a3b-2507-tokenizer")
+    n_prompt_tok = {}
+    for pr in m["prompts"]:
+        n = len(tok(pr["text"], add_special_tokens=True).input_ids)
+        n_prompt_tok[pr["id"]] = n
+    for k in ("prefill", "decode"):
+        agg[k] = {"n": 0, "miss66": 0.0, "miss32": 0.0, "repeat": 0.0}
 
     reg_of = {p["id"]: p["register"] for p in m["prompts"]}
     split_of = {p["id"]: p["split"] for p in m["prompts"]}
@@ -56,7 +73,13 @@ def main():
                             minlength=m["n_expert"])
         # "cold" is by position within the prompt, which is what the LRU sees
         cold = K[:, 1] < COLD
-        for name, sel in (("cold", cold), ("warm", ~cold)):
+        # boundary per prompt: positions below the prompt's token count are
+        # prefill, the rest are the generated continuation
+        bound = np.array([n_prompt_tok.get(int(p), 0) for p in K[:, 0]])
+        prefill = (K[:, 1] < bound) & ~cold
+        decode = (K[:, 1] >= bound) & ~cold
+        for name, sel in (("cold", cold), ("warm", ~cold),
+                          ("prefill", prefill), ("decode", decode)):
             a = agg[name]
             a["n"] += int(sel.sum())
             a["miss66"] += float(miss66[sel].sum())
@@ -81,7 +104,7 @@ def main():
     print(f"{'':8}{'rows':>12}{'miss66/8':>11}{'miss rate':>11}{'miss32/8':>11}"
           f"{'repeat/8':>11}")
     print("-" * 64)
-    for name in ("cold", "warm"):
+    for name in ("cold", "warm", "prefill", "decode"):
         a = agg[name]
         n = max(a["n"], 1)
         row = {"rows": a["n"], "miss66": a["miss66"] / n, "miss32": a["miss32"] / n,
@@ -114,7 +137,10 @@ def main():
     print(f"\nexperts: rarest seen {hist.min():,}, commonest {hist.max():,} "
           f"({hist.max()/max(hist.min(),1):.1f}x), never seen {(hist==0).sum()}")
 
-    dst = os.path.join(ROOT, "artifacts", "r4_coverage.json")
+    # Named after the corpus: running this on v3 and v4 is the whole point, and
+    # a single fixed filename means the second run silently destroys the first.
+    tag = os.path.basename(os.path.normpath(corpus))
+    dst = os.path.join(ROOT, "artifacts", f"r4_coverage_{tag}.json")
     with open(dst, "w") as f:
         json.dump(out, f, indent=1)
     print(f"\nwrote {dst}")
