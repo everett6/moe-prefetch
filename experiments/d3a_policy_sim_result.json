@@ -1,0 +1,107 @@
+{
+ "capacity": 63,
+ "top_p": 8,
+ "model": "predictor-hostfree.bin",
+ "n_tokens": 889,
+ "rows": [
+  {
+   "expert_hit": 0.854538891367126,
+   "full_layer_rate": 0.5486582302256239,
+   "uploads_per_token": 29.959505061867265,
+   "pessimistic_tok_s": 77.9669882781655,
+   "optimistic_tok_s": 123.21540452624308,
+   "max_inserts": 2,
+   "source": "demand (as implemented)"
+  },
+  {
+   "expert_hit": 0.8667063836780692,
+   "full_layer_rate": 0.5892282769469162,
+   "uploads_per_token": 29.85376827896513,
+   "pessimistic_tok_s": 81.9589681751639,
+   "optimistic_tok_s": 126.12712843682345,
+   "max_inserts": 2,
+   "source": "demand, early issue"
+  },
+  {
+   "expert_hit": 0.8681649566830231,
+   "full_layer_rate": 0.6017185922569436,
+   "uploads_per_token": 35.42632170978628,
+   "pessimistic_tok_s": 83.27159834486538,
+   "optimistic_tok_s": 126.48543337171908,
+   "max_inserts": 2,
+   "source": "demand+predict, early"
+  },
+  {
+   "expert_hit": 0.8098044279576456,
+   "full_layer_rate": 0.4013805085342662,
+   "uploads_per_token": 26.43644544431946,
+   "pessimistic_tok_s": 66.25244587455002,
+   "optimistic_tok_s": 113.5756071843742,
+   "max_inserts": 2,
+   "source": "predict only"
+  },
+  {
+   "expert_hit": 0.8555132298734534,
+   "full_layer_rate": 0.5599511656845021,
+   "uploads_per_token": 35.57705286839145,
+   "pessimistic_tok_s": 79.03858745600459,
+   "optimistic_tok_s": 123.44360632928364,
+   "max_inserts": 2,
+   "source": "demand + predict"
+  },
+  {
+   "expert_hit": 0.8546239992487028,
+   "full_layer_rate": 0.5488225764797032,
+   "uploads_per_token": 29.951631046119235,
+   "pessimistic_tok_s": 77.98237487669822,
+   "optimistic_tok_s": 123.23530418028386,
+   "max_inserts": 2,
+   "source": "demand, predict-protect"
+  },
+  {
+   "expert_hit": 0.7958144530791444,
+   "full_layer_rate": 0.3366750404996126,
+   "uploads_per_token": 19.093363329583802,
+   "pessimistic_tok_s": 62.14985140259881,
+   "optimistic_tok_s": 110.86313828580563,
+   "max_inserts": 2,
+   "source": "predict-filtered admit"
+  },
+  {
+   "expert_hit": 0.8653505270819148,
+   "full_layer_rate": 0.5900734862536098,
+   "uploads_per_token": 29.604049493813275,
+   "pessimistic_tok_s": 82.04648596362672,
+   "optimistic_tok_s": 125.7958720552853,
+   "max_inserts": 2,
+   "source": "oracle: next token"
+  },
+  {
+   "expert_hit": 0.8657408494353532,
+   "full_layer_rate": 0.5927499823914728,
+   "uploads_per_token": 30.9718785151856,
+   "pessimistic_tok_s": 82.32486287955531,
+   "optimistic_tok_s": 125.8910552516272,
+   "max_inserts": 2,
+   "source": "oracle: next + demand"
+  },
+  {
+   "expert_hit": 0.8575528842767591,
+   "full_layer_rate": 0.5504660390204963,
+   "uploads_per_token": 29.68278965129359,
+   "pessimistic_tok_s": 78.13657553842442,
+   "optimistic_tok_s": 123.92406544495971,
+   "max_inserts": 2,
+   "source": "oracle: protect only"
+  },
+  {
+   "expert_hit": 0.8692126640527786,
+   "full_layer_rate": 0.5937360599159486,
+   "uploads_per_token": 30.59392575928009,
+   "pessimistic_tok_s": 82.42789957136903,
+   "optimistic_tok_s": 126.74406625721407,
+   "max_inserts": 2,
+   "source": "oracle: admit + protect"
+  }
+ ]
+}

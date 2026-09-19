@@ -1,0 +1,208 @@
+{
+ "capacity": 66,
+ "top_p": 8,
+ "layer_us": 184.69267139479905,
+ "copy_us": 57.060043235184494,
+ "d1_tok_s": 112.8,
+ "anchor_w": 0.724669603524229,
+ "rows": [
+  {
+   "expert_hit": 0.8824484070152372,
+   "full_layer_rate": 0.6425468973775034,
+   "uploads_per_token": 14.688413948256468,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 87.87187268001279,
+   "optimistic_tok_s": 130.10488555956792,
+   "budget": 1,
+   "source": "predictor",
+   "anchored_tok_s": 118.47685337907366
+  },
+  {
+   "expert_hit": 0.8824484070152372,
+   "full_layer_rate": 0.6425468973775034,
+   "uploads_per_token": 14.688413948256468,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 87.87187268001279,
+   "optimistic_tok_s": 130.10488555956792,
+   "budget": 1,
+   "source": "predictor, no deadline",
+   "anchored_tok_s": 118.47685337907366
+  },
+  {
+   "expert_hit": 0.9042947197896368,
+   "full_layer_rate": 0.7794708050618646,
+   "uploads_per_token": 18.727784026996627,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 107.85396039063924,
+   "optimistic_tok_s": 136.0598236807795,
+   "budget": 1,
+   "source": "oracle",
+   "anchored_tok_s": 128.29389215816377
+  },
+  {
+   "expert_hit": 0.8990297701500246,
+   "full_layer_rate": 0.6562580705749771,
+   "uploads_per_token": 22.177727784026995,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 89.53292327197018,
+   "optimistic_tok_s": 134.57537455101152,
+   "budget": 2,
+   "source": "predictor",
+   "anchored_tok_s": 122.17381858211247
+  },
+  {
+   "expert_hit": 0.8990297701500246,
+   "full_layer_rate": 0.6562580705749771,
+   "uploads_per_token": 22.177727784026995,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 89.53292327197018,
+   "optimistic_tok_s": 134.57537455101152,
+   "budget": 2,
+   "source": "predictor, no deadline",
+   "anchored_tok_s": 122.17381858211247
+  },
+  {
+   "expert_hit": 0.9289114408470875,
+   "full_layer_rate": 0.8396215340548916,
+   "uploads_per_token": 28.523059617547805,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 119.82402495100736,
+   "optimistic_tok_s": 143.45864303386693,
+   "budget": 2,
+   "source": "oracle",
+   "anchored_tok_s": 136.9513142665598
+  },
+  {
+   "expert_hit": 0.9125002934754537,
+   "full_layer_rate": 0.6638884323715164,
+   "uploads_per_token": 27.96062992125984,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 90.48479648671896,
+   "optimistic_tok_s": 138.43981548985292,
+   "budget": 3,
+   "source": "predictor",
+   "anchored_tok_s": 125.23634109471692
+  },
+  {
+   "expert_hit": 0.9125002934754537,
+   "full_layer_rate": 0.6638884323715164,
+   "uploads_per_token": 27.96062992125984,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 90.48479648671896,
+   "optimistic_tok_s": 138.43981548985292,
+   "budget": 3,
+   "source": "predictor, no deadline",
+   "anchored_tok_s": 125.23634109471692
+  },
+  {
+   "expert_hit": 0.9461824712981006,
+   "full_layer_rate": 0.8657291104172047,
+   "uploads_per_token": 35.382452193475814,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 125.88819049827657,
+   "optimistic_tok_s": 149.14901907141714,
+   "budget": 3,
+   "source": "oracle",
+   "anchored_tok_s": 142.7446059180194
+  },
+  {
+   "expert_hit": 0.9121099711220153,
+   "full_layer_rate": 0.6642406029159721,
+   "uploads_per_token": 32.841394825646795,
+   "late_per_token": 5.155230596175478,
+   "pessimistic_tok_s": 90.52921796513279,
+   "optimistic_tok_s": 138.32471959575895,
+   "budget": 4,
+   "source": "predictor",
+   "anchored_tok_s": 125.16516518204028
+  },
+  {
+   "expert_hit": 0.9242305073603644,
+   "full_layer_rate": 0.6702040241354214,
+   "uploads_per_token": 32.83464566929134,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 91.28809955654623,
+   "optimistic_tok_s": 141.99041398922856,
+   "budget": 4,
+   "source": "predictor, no deadline",
+   "anchored_tok_s": 128.03052565423894
+  },
+  {
+   "expert_hit": 0.9455074777545606,
+   "full_layer_rate": 0.8656821543446106,
+   "uploads_per_token": 40.94488188976378,
+   "late_per_token": 5.568053993250843,
+   "pessimistic_tok_s": 125.87673278855127,
+   "optimistic_tok_s": 148.9181619456107,
+   "budget": 4,
+   "source": "oracle",
+   "anchored_tok_s": 142.57415612042914
+  },
+  {
+   "expert_hit": 0.9117225835231141,
+   "full_layer_rate": 0.664686685605616,
+   "uploads_per_token": 40.56017997750281,
+   "late_per_token": 13.043869516310462,
+   "pessimistic_tok_s": 90.58554782249034,
+   "optimistic_tok_s": 138.21067815186703,
+   "budget": 6,
+   "source": "predictor",
+   "anchored_tok_s": 125.09803213606949
+  },
+  {
+   "expert_hit": 0.9428485901439204,
+   "full_layer_rate": 0.6888925410278685,
+   "uploads_per_token": 40.518560179977506,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 93.75096303125163,
+   "optimistic_tok_s": 148.01569560062504,
+   "budget": 6,
+   "source": "predictor, no deadline",
+   "anchored_tok_s": 133.07496526764777
+  },
+  {
+   "expert_hit": 0.944682811729627,
+   "full_layer_rate": 0.8656117202357195,
+   "uploads_per_token": 49.40607424071991,
+   "late_per_token": 14.040494938132733,
+   "pessimistic_tok_s": 125.85955013401613,
+   "optimistic_tok_s": 148.63708285478867,
+   "budget": 6,
+   "source": "oracle",
+   "anchored_tok_s": 142.36573574003853
+  },
+  {
+   "expert_hit": 0.912145188176461,
+   "full_layer_rate": 0.6650623341863686,
+   "uploads_per_token": 44.52980877390326,
+   "late_per_token": 17.0607424071991,
+   "pessimistic_tok_s": 90.63303789160378,
+   "optimistic_tok_s": 138.33509633255585,
+   "budget": 8,
+   "source": "predictor",
+   "anchored_tok_s": 125.20126966929811
+  },
+  {
+   "expert_hit": 0.9528062122884042,
+   "full_layer_rate": 0.7312938745803301,
+   "uploads_per_token": 44.465691788526435,
+   "late_per_token": 0.0,
+   "pessimistic_tok_s": 99.86374189940298,
+   "optimistic_tok_s": 151.45299106106123,
+   "budget": 8,
+   "source": "predictor, no deadline",
+   "anchored_tok_s": 137.24890263549452
+  },
+  {
+   "expert_hit": 0.9445566172845303,
+   "full_layer_rate": 0.8656351982720165,
+   "uploads_per_token": 53.89876265466817,
+   "late_per_token": 18.53543307086614,
+   "pessimistic_tok_s": 125.86527716428236,
+   "optimistic_tok_s": 148.59416433230592,
+   "budget": 8,
+   "source": "oracle",
+   "anchored_tok_s": 142.33621081688094
+  }
+ ]
+}
