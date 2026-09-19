@@ -32,7 +32,34 @@ Two other things are unfinished, one of which was in the original brief:
 The current probe is linear, single-input, and one layer ahead. Each of those is
 a choice that can be revisited, cheapest first.
 
-**A1. Fix the MLP.** It scored 43.7% against ridge's 54.1% in milestone 2, which
+**A1. Fix the MLP. — DONE 2026-09-18. Hypothesis confirmed, payoff marginal.**
+
+Proper training (Adam + cosine schedule, BCE-with-logits instead of softmax on a
+multi-label target, early stopping on the validation register, hidden width
+chosen per layer) moved the MLP **+9.5 points, 43.7% → 53.2%**. So milestone 2's
+gap really was the optimiser, not nonlinearity — but the fixed MLP still only
+*ties* linear ridge (53.2 vs 54.1) rather than beating it.
+
+| predictor | recall@8 |
+|---|---|
+| **ridge+MLP blend + prior** | **60.5%** |
+| per-layer pick (on validation) + prior | 60.0% |
+| ridge + prior (milestone 2's best) | 59.7% |
+| MLP + prior | 58.6% |
+| ridge alone | 54.1% |
+| MLP alone | 53.2% |
+| naive-repeat | 39.5% |
+
+The MLP beats ridge on **31 of 47 layers** yet loses on average, i.e. it fails
+badly on a few rather than being uniformly worse — which is why blending the two
+helps at all. Net gain over milestone 2's best: **+0.8 points of recall@8**,
+worth roughly +1 tok/s. Real, but not the +38.7 that is on the table.
+
+**Conclusion: nonlinearity is not the bottleneck.** 3.5K rows per layer against
+256 features is not much to fit a nonlinearity on, and the signal that is missing
+is not a curved version of the signal already there. Effort moves to A2.
+
+**A1 (original text). Fix the MLP.** It scored 43.7% against ridge's 54.1% in milestone 2, which
 almost certainly says more about plain SGD at a fixed learning rate for 150
 epochs than about nonlinearity. Redo it properly — Adam, learning-rate schedule,
 early stopping on the validation register. *If a tuned MLP still loses to ridge,
