@@ -1,190 +1,109 @@
-# Plan: close the predictor gap, then make it self-improving
+# Plan: land it in llama.cpp
 
-*Written 2026-09-18, after the M5 plan closed at 129.1 tok/s.
-The closed plan is kept at [`docs/PLAN-m5-closed.md`](docs/PLAN-m5-closed.md).*
+*Written 2026-09-18. Phases A, B and C are closed — see
+[`docs/PLAN-abc-closed.md`](docs/PLAN-abc-closed.md). This covers the one thing
+left, which is no longer blocked on anything.*
 
-## Where the value is now
+## State
 
-The project cleared its bar — 129.1 tok/s at Q4_K_M against a 110 target, 1.66x
-over today's 77.9. So the question changes from *does this work* to *what is
-still on the table*, and the answer is unusually clear:
-
-| | all-8 on time | tok/s |
-|---|---|---|
-| LRU cache alone | 57.3% | 113.1 |
-| **current: LRU + ridge probe, top-16** | **69.2%** | **129.1** |
-| oracle: perfect prediction, same cache | 98.5% | **167.8** |
-
-**A better predictor is worth up to +38.7 tok/s** — more than twice what the
-current predictor won over plain LRU (+16). Nothing else available is close to
-that, and none of it needs root.
-
-Two other things are unfinished, one of which was in the original brief:
-
-- **"Self-trained / self-improving" was asked for and has not been built.** The
-  probe is fitted once, offline, and frozen. That is a static predictor, not a
-  self-improving one.
-- **The larger model** (`docs/SCOPE.md` Option B) was always gated on the
-  mechanism proving out on 30B. It now has.
-
-## Phase A — close the predictor gap (biggest lever, no root)
-
-The current probe is linear, single-input, and one layer ahead. Each of those is
-a choice that can be revisited, cheapest first.
-
-**A1. Fix the MLP. — DONE 2026-09-18. Hypothesis confirmed, payoff marginal.**
-
-Proper training (Adam + cosine schedule, BCE-with-logits instead of softmax on a
-multi-label target, early stopping on the validation register, hidden width
-chosen per layer) moved the MLP **+9.5 points, 43.7% → 53.2%**. So milestone 2's
-gap really was the optimiser, not nonlinearity — but the fixed MLP still only
-*ties* linear ridge (53.2 vs 54.1) rather than beating it.
-
-| predictor | recall@8 |
+| | |
 |---|---|
-| **ridge+MLP blend + prior** | **60.5%** |
-| per-layer pick (on validation) + prior | 60.0% |
-| ridge + prior (milestone 2's best) | 59.7% |
-| MLP + prior | 58.6% |
-| ridge alone | 54.1% |
-| MLP alone | 53.2% |
-| naive-repeat | 39.5% |
+| projected speed | **133 tok/s** at Q4_K_M (1.71x over 77.9, +23 over the 110 bar) |
+| predictor | 68.9% recall@8, per-layer ridge on `h_norm` + prev + cur experts |
+| engine | working, PyTorch, real async copies and CUDA-event deadlines |
+| toolchain | **built and verified** — conda `cuda-nvcc` 13.2.86, no root |
+| baseline | **reproduced on the new binary**: 78.23 ± 0.48 t/s vs 77.9 |
+| what's left | the MoE graph surgery |
 
-The MLP beats ridge on **31 of 47 layers** yet loses on average, i.e. it fails
-badly on a few rather than being uniformly worse — which is why blending the two
-helps at all. Net gain over milestone 2's best: **+0.8 points of recall@8**,
-worth roughly +1 tok/s. Real, but not the +38.7 that is on the table.
+**PR #27861 is a good starting point and better than expected.** Open, draft,
+updated 2026-09-18, and **+645/−0 across 12 files** — purely additive. Nothing to
+un-merge, and our predictor is additive to *it*.
 
-**Conclusion: nonlinearity is not the bottleneck.** 3.5K rows per layer against
-256 features is not much to fit a nonlinearity on, and the signal that is missing
-is not a curved version of the signal already there. Effort moves to A2.
+## D1 — measure PR #27861 alone (do this first, it is decisive)
 
-**A1 (original text). Fix the MLP.** It scored 43.7% against ridge's 54.1% in milestone 2, which
-almost certainly says more about plain SGD at a fixed learning rate for 150
-epochs than about nonlinearity. Redo it properly — Adam, learning-rate schedule,
-early stopping on the validation register. *If a tuned MLP still loses to ridge,
-that is a real finding and A2 is where the effort goes instead.*
+Build the `moe-expert-cache` branch with the toolchain that now works, run
+`--moe-expert-cache` on Q4_K_M, measure.
 
-**A2. Richer inputs. — DONE 2026-09-18. The big win: 68.9% recall, 133.3 tok/s.**
+This is the highest-value step in the plan and it writes no code. Our simulation
+says an LRU cache alone is worth **113 tok/s**; the predictor adds +20 on top. D1
+tests the 113 — the larger and more load-bearing half — using someone else's
+implementation.
 
-Adding features the model already computes took recall@8 from 59.6% to **68.9%**
-and end-to-end speed from 129.1 to **133.3 tok/s** (1.71x over today's 77.9,
-+23 over the bar). The most valuable single feature was `E_L`, this layer's own
-experts — **+7.9 points**, despite being worth essentially nothing alone (6.5%
-against a 6.2% floor in milestone 1). Trajectory features added nothing (+0.7).
-`ffn_moe_logits` was dropped without testing: it is a linear projection of `h_L`,
-which the probe already has.
+- **If it lands near 113:** the cost model is validated end to end and the only
+  open question is whether our predictor adds its +20. Proceed to D2.
+- **If it lands far below:** our model of what a cache is worth is wrong, and
+  that is worth far more than the predictor is. Stop and find out why before
+  writing anything.
+- **If it does not build or run:** fall back to D1b.
 
-Prefetch depth re-tuned to **top-8** — it matches top-16's speed on 30% less
-bandwidth now that the predictor is better.
+**D1b, fallback.** Patch mainline minimally to force a known number of a layer's
+experts onto the CPU, and time it. That measures `FIXED` — the CPU-hop cost — in
+llama.cpp's real graph rather than in the PyTorch proxy, which is the one
+constant the 133 figure rests on (measured 10.5 µs; the verdict survives up to
+121 µs). Smaller than D1 and it answers the most important question on its own.
 
-**A2 (original text). Richer inputs.** The probe sees only `h_L`. Three additions, each free at
-inference time because the model has already computed them:
-- `ffn_moe_logits-L` — the router's own 128-d scores for layer L
-- the previous token's experts at layer L+1 as *features*, not merely as the
-  ensemble prior bolted on afterwards
-- layer index and token position
+## D2 — export the predictor for C++
 
-**A3. Predict two layers ahead.** `h_L → E_{L+2}` gives the copy two layers of
-compute instead of one. Accuracy will fall; lateness (currently 4.6–5.0%) will
-fall too. Worth knowing which way the trade lands, since it costs one experiment.
+`src/predictor.py` holds a PCA basis (2048×256), a scale vector, and 47 ridge
+matrices (256×128) — **2.06 M parameters, ~8 MB fp32**. Write it as a flat binary
+with a small header and a ~40-line loader. No dependency, no format library.
 
-**A4. Spend the cache asymmetrically.** Capacity is currently uniform at 66/layer.
-Milestone 1 found routing predictability varies sharply by depth — the probe got
-48.7% at layer 0 and 61.4% at layer 46, against naive-repeat's 21.9% and 27.2%.
-Layers where prediction is weak may deserve more cache, and vice versa.
+Include the A2 feature layout in the header, because it is the part that will
+silently disagree: the input is `[PCA(h_norm) | prev-token experts at L+1 |
+this layer's experts]`, in that order, with the training-time scaling baked in.
+Get the order wrong and it still runs, just worse.
 
-**Target: all-8-on-time above 78%, which is 139 tok/s.** Above 86% would be 149.
+## D3 — hook it into the cache
 
-## Phase B — make it self-improving (the unfinished half of the brief)
+Find PR #27861's admission point and call the predictor at `ffn_inp-L`, before
+layer L's FFN, inserting the top-8 predictions for layer L+1.
 
-The predictor is wrong about 30% of layers, every token, and it *knows* — the
-true experts are revealed microseconds later when the layer runs. That is a free
-training signal being thrown away, and it is exactly the mechanism AI2 already
-built for its draft model in `draft_trainer.py`.
+Two things to respect, both already measured here:
 
-**B1/B2 — DONE 2026-09-18. The mechanism works; it does not pay here.**
+- **`E_L` is a predictor input**, so prediction must happen *after* layer L's
+  router and *before* its FFN. That window is the bulk of a layer and is enough
+  (measured: 4.6–7.8% late arrivals in the PyTorch engine).
+- **Top-8, not top-16.** With the A2 predictor those are within noise of each
+  other on speed (133.2 vs 133.3) and top-8 moves 30% less traffic.
 
-Online adaptation makes the predictor **substantially better in isolation and
-makes no difference to the system.** Both halves are the result.
+## D4 — validate, on two criteria
 
-*In isolation*, streaming the held-out registers (41,704 steps, predict-then-
-update so nothing is scored on data it has learned from):
+1. **Speed:** Q4_K_M above **110 tok/s**, measured with `llama-bench -ncmoe`
+   against the 78.23 now confirmed on this binary.
+2. **Byte-identical output under greedy decoding**, against the same build with
+   the cache off. Prefetching changes *where weights live*, never which experts
+   are selected — so any divergence is a bug, not a trade-off. This is a stricter
+   bar than n-gram speculation can pass, which is why speculation must be off
+   while testing it.
 
-| rule | recall@8 | first quarter | last quarter |
-|---|---|---|---|
-| frozen | 65.1% | 65.8% | 61.8% |
-| **LMS, η=0.001** | **78.1%** | 78.8% | 78.5% |
-| RLS (exact incremental ridge) | 77.5% | 77.6% | 77.9% |
-| LMS, η=0.02 (first guess) | 6.9% | — | diverged |
+Then AI2's `model_quality_eval.py` (414 graded problems) as a backstop, since
+byte-identity should make it redundant — and if it is not redundant, criterion 2
+was not really met.
 
-**+13.0 points**, and the frozen probe *degrades* 4 points across the stream
-while the online one holds. The cheap rule beats the exact one: LMS at a quarter
-of RLS's cost scores slightly higher, because RLS's exactness is fitted to a
-distribution that is itself shifting.
+## Known hazards
 
-*End to end through the real prefetch engine*, the entire held-out stream
-(889 tokens, the same 41.7K steps):
+- **PR #27861 disables multi-token decode**, and n-gram speculation is
+  multi-token decode. Not fatal here — AI2 measured speculation at 0.99x on
+  write-from-scratch prompts — but it costs the +8% drafting is worth on code
+  edits. Measure both ways.
+- **Its cache is not counted in `--fit`**, and launch-time VRAM fitting is how
+  this stack chooses a split at all. Our 66/layer needs 9.03 GB; something has to
+  reconcile those.
+- **Open upstream bugs**: duplicate dummy slot ids breaking batched `mul_mat_id`
+  at `n_tokens > 1`, expert tables mutating mid-prefill. Both hit prefill, not
+  single-token decode, which is what we measure — but they will hit real use.
+- **It is a draft PR.** It can be rebased or abandoned under us. D1 gets a
+  measurement out of it before that matters.
 
-| policy | expert hit | all-8 on time | GB moved |
-|---|---|---|---|
-| frozen predictor | 90.8% | **72.7%** | 173.7 |
-| online predictor | 90.7% | 70.6% | 157.1 |
+## Order
 
-**No gain.** Reproduced at 250 tokens and at 889. The reason is that the LRU
-cache already holds most of what any predictor would ask for: the predictor only
-contributes at the margin, on experts the cache lacks, and a probe that is 13
-points better overall is not necessarily better *there*. Online moved 10% less
-traffic, so it is making different predictions, not worse ones — they just are
-not the ones that were missing.
+**D1 → (D1b if needed) → D2 → D3 → D4.**
 
-This is the third time in this repo that a component-level improvement did not
-survive system-level measurement, and the second where the component metric was
-the misleading one. **B3 (persistence) is not worth building.**
+D1 first because it is the only step that can invalidate the rest, and it costs a
+build and a benchmark. Everything after it is implementation.
 
-**B1 (original text). Online ridge.** Ridge regression has an exact incremental form (recursive
-least squares), so the probe can be updated per token without retraining. Bound
-the per-token cost: it must stay far below the 2.92 MiB fetch it informs.
-
-**B2. Measure whether it actually helps.** The honest test is distribution shift,
-because that is the only place online adaptation can win: fit on 5 registers,
-then run on a *held-out* register with updating on versus off. If online learning
-does not beat the frozen probe there, it does not beat it anywhere, and B3 is
-dead.
-
-**B3. Only if B2 pays: persistence.** Checkpoint the adapted probe so a session
-starts where the last one finished, with a guard against drift on a workload
-change.
-
-## Phase C — the larger model (`docs/SCOPE.md` Option B)
-
-Now justified, not before. The mechanism is proven on 30B and Phase A/B improve
-it further.
-
-**C1. Re-price it with real numbers.** A cold token needs ~656 MB of experts; a
-consumer NVMe does 3–7 GB/s, so a miss that reaches disk costs 100–200 ms against
-the 39 µs a CPU-computed miss costs now — **a 3,000x penalty**. The RAM tier has
-to absorb essentially everything. Compute the hit rate that requires *before*
-downloading 45–60 GB.
-
-**C2. If C1 survives**, pick the model and capture traces. Everything downstream
-reuses Phase A and B unchanged.
-
-## Phase D — llama.cpp integration (blocked)
-
-Specified in [`docs/INTEGRATION.md`](docs/INTEGRATION.md). Needs the CUDA
-toolkit as root. Start from PR #27861, not mainline. Unblocked the moment someone
-with root runs one `apt`/runfile install; nothing in Phases A–C depends on it.
-
-## Order, and why
-
-**A1 → A2 → B2 → A3/A4 → C1.** Phase A first because +38.7 tok/s dwarfs
-everything else available. B2 early because it is cheap and it decides whether
-Phase B exists at all — and because a self-improving predictor was asked for, so
-"we measured it and it did not help" is a legitimate answer but "we never tried"
-is not.
-
-**Rule carried over from AI2, which has earned it twice in this repo alone:**
-price it before building it, and when a result contradicts the design, suspect
-the test before the signal. The one-shared-probe collapse in milestone 1 and the
-`admit()`-without-copy bug in milestone 4 were both nearly reported as findings.
+**Rule this repo has now earned four times:** when something looks blocked, check
+the block. "Needs root" was wrong about the toolkit, "needs a CUDA build" was
+wrong about `FIXED`, the shared-probe collapse was the test not the signal, and
+`admit()`-without-copy flattered the baseline. Three of those four were nearly
+reported as findings.
