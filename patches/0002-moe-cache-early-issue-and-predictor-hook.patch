@@ -1,0 +1,398 @@
+diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
+index 4e0732e..0b49f90 100644
+--- a/src/llama-moecache.cpp
++++ b/src/llama-moecache.cpp
+@@ -1,5 +1,7 @@
+ #include "llama-moecache.h"
+ 
++#include "moe-predictor.h"
++
+ #include "llama-impl.h"
+ #include "llama-model.h"
+ 
+@@ -30,6 +32,19 @@ struct layer_state {
+ 
+     std::vector<bool>     slot_in_flight; // slot has an upload pending
+ 
++    // Slots that have already been evicted at a step boundary and are in no
++    // table. A copy may be written into one of these WHILE A GRAPH IS RUNNING,
++    // because nothing in the graph can reach it: the tables only ever point at
++    // an occupied slot or at the dummy. This is what lets the upload be issued
++    // from the observe callback instead of waiting for the next step, without
++    // any mid-graph table mutation.
++    std::vector<int32_t>  free_slots;
++
++    // the expert ids this layer routed to, most recently. Read one layer ahead
++    // (layer L+1 has not run yet when layer L is observed, so its entry is
++    // still the previous token's) -- which is exactly the predictor's `prev`.
++    std::vector<int32_t>  cur_ids;
++
+     uint64_t n_hit  = 0;
+     uint64_t n_miss = 0;
+ };
+@@ -45,13 +60,23 @@ struct moe_cache {
+     int32_t n_slots     = 0;
+     int32_t max_inserts = 2;
+ 
+-    uint64_t clock   = 0;
+-    uint64_t n_steps = 0;
++    uint64_t clock       = 0;
++    uint64_t n_steps     = 0;
++    uint64_t n_uploads   = 0;
++    uint64_t n_scheduled = 0;      // handed to the worker
++    uint64_t n_copied    = 0;      // worker finished the copy
++    uint64_t n_published = 0;      // made visible in the tables
+ 
+     std::mutex mtx; // guards pending lists + clock (observe runs during graph exec)
+ 
+     std::vector<layer_state> layers;
+     std::map<const ggml_tensor *, size_t> by_up_src;
++    std::map<int, size_t>                 by_il;
++
++    moe_predictor pred;
++    bool          have_pred   = false;
++    bool          early_issue = false;
++    int32_t       predict_top = 3;
+ 
+     std::vector<ggml_context *>         ctxs;
+     std::vector<ggml_backend_buffer_t>  bufs;
+@@ -79,6 +104,60 @@ int parse_layer_from_name(const char * name) {
+     return atoi(name + 4);
+ }
+ 
++// Enqueue uploads for `ids` into layer `li`, spending at most `budget` of the
++// layer's pre-freed slots. Caller holds mc->mtx. Touches no table.
++//
++// `min_keep` is not optional decoration. Predictions for layer L+1 are issued
++// while layer L is observed -- that is the whole point, it buys the copy a
++// layer of slack -- but layer L+1's own demand misses are not known yet and
++// arrive later in the same token. Without a floor the predictor drains the pool
++// first and the demand path, which has ground truth rather than a guess, finds
++// it empty. Measured: that inversion cost 4 tok/s and read exactly like "the
++// predictor does not help".
++int issue_uploads(moe_cache * mc, size_t li, const int32_t * ids, size_t n, int budget,
++                  int min_keep = 0) {
++    layer_state & ls = mc->layers[li];
++    int issued = 0;
++    for (size_t i = 0; i < n && issued < budget; ++i) {
++        const int32_t id = ids[i];
++        if (id < 0 || id >= (int32_t) ls.expert_slot.size()) {
++            continue;
++        }
++        if (ls.expert_slot[id] >= 0) {
++            continue;                       // already resident
++        }
++        if ((int) ls.free_slots.size() <= min_keep) {
++            break;      // reserved for the demand path, or simply nothing spare
++        }
++        bool dup = false;
++        {
++            std::lock_guard<std::mutex> wlk(mc->wmtx);
++            for (const auto & j : mc->todo) {
++                if (j.layer_idx == li && j.expert == id) { dup = true; break; }
++            }
++            if (!dup) {
++                for (const auto & j : mc->done) {
++                    if (j.layer_idx == li && j.expert == id) { dup = true; break; }
++                }
++            }
++            if (dup) {
++                continue;
++            }
++            const int32_t slot = ls.free_slots.back();
++            ls.free_slots.pop_back();
++            ls.slot_in_flight[slot] = true;
++            mc->todo.push_back({li, id, slot});
++            mc->n_uploads++;
++            mc->n_scheduled++;
++        }
++        issued++;
++    }
++    if (issued) {
++        mc->wcv.notify_one();
++    }
++    return issued;
++}
++
+ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+     moe_cache * mc = (moe_cache *) ud;
+ 
+@@ -102,12 +181,20 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+     }
+ 
+     std::lock_guard<std::mutex> lock(mc->mtx);
++
++    // `prev` for the predictor must be read BEFORE this layer's ids are stored,
++    // and from the NEXT layer, which has not run yet this token.
++    const size_t li = (size_t) (ls - mc->layers.data());
++    std::vector<int32_t> observed;
++    observed.reserve(n_ids);
++
+     for (int64_t t = 0; t < n_tokens; ++t) {
+         for (int64_t i = 0; i < n_ids; ++i) {
+             const int32_t id = *(const int32_t *) ((const char *) ids->data + t*ids->nb[1] + i*ids->nb[0]);
+             if (id < 0 || id >= (int32_t) ls->expert_slot.size()) {
+                 continue;
+             }
++            observed.push_back(id);
+             const int32_t slot = ls->expert_slot[id];
+             if (slot >= 0) {
+                 ls->n_hit++;
+@@ -124,6 +211,32 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+             }
+         }
+     }
++
++    if (mc->early_issue) {
++        // What just missed here is wanted again next token far more often than
++        // not -- that is the locality the cache exists for. Issuing now gives
++        // the copy the rest of this token to complete, instead of the zero
++        // slack it gets when the job is only created at the step boundary.
++        issue_uploads(mc, li, ls->pending.data(), ls->pending.size(), mc->max_inserts);
++
++        // ...and the predictor names experts the NEXT layer will want, from the
++        // two id lists already on the host. No device readback, no sync.
++        if (mc->have_pred && mc->pred.has_layer(il)) {
++            auto nit = mc->by_il.find(il + 1);
++            if (nit != mc->by_il.end()) {
++                layer_state & nls = mc->layers[nit->second];
++                std::vector<float>   sc(mc->pred.n_expert);
++                std::vector<int32_t> top(mc->predict_top);
++                mc->pred.score(il, nls.cur_ids.data(), nls.cur_ids.size(),
++                               observed.data(), observed.size(), sc.data());
++                const size_t n_top = mc->pred.top_k_ids(sc.data(), mc->predict_top, top.data());
++                issue_uploads(mc, nit->second, top.data(), n_top, mc->predict_top,
++                              /*min_keep=*/ mc->max_inserts);
++            }
++        }
++    }
++
++    ls->cur_ids = observed;
+ }
+ 
+ void upload_slice(ggml_tensor * dst_c, const ggml_tensor * src, int32_t expert, int32_t slot) {
+@@ -151,7 +264,12 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+     }
+     [&]() {
+         if (n_slots <= 0) {
+-            g_init_done = true;
++            // Do NOT latch g_init_done here. llama.cpp creates a dry-run context
++            // for memory estimation before the real one, and that context carries
++            // default params (n_moe_cache_slots = 0). Latching on it permanently
++            // disabled the cache for the real context that follows -- silently,
++            // since this branch logs nothing: --moe-expert-cache parsed, plumbed
++            // through to here, and then did nothing at all.
+             return;
+         }
+ 
+@@ -161,6 +279,40 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+             mc->max_inserts = max_inserts;
+         }
+ 
++        // Issue uploads from the observe callback rather than at the step
++        // boundary. Off by default so the shipped behaviour is unchanged and
++        // the two can be measured against each other.
++        if (const char * e = getenv("LLAMA_MOE_EARLY_ISSUE")) {
++            mc->early_issue = atoi(e) != 0;
++        }
++        if (const char * e = getenv("LLAMA_MOE_PREDICT_TOP")) {
++            mc->predict_top = atoi(e);
++        }
++        if (const char * path = getenv("LLAMA_MOE_PREDICTOR")) {
++            std::string err;
++            if (mc->pred.load(path, err)) {
++                mc->have_pred = mc->predict_top > 0;
++                LLAMA_LOG_INFO("%s: MoE predictor loaded from %s (%u features, "
++                        "%zu layers, top-%d)\n", __func__, path, mc->pred.feat_dim,
++                        mc->pred.layer_of.size(), mc->predict_top);
++                if (mc->pred.off_pca >= 0) {
++                    LLAMA_LOG_WARN("%s: this predictor wants a PCA block over the hidden "
++                            "state, which is not available at the observe callback - "
++                            "use the host-free model instead\n", __func__);
++                    mc->have_pred = false;
++                }
++            } else {
++                // Loud, because a predictor that silently does not load looks
++                // exactly like a predictor that does not help.
++                LLAMA_LOG_ERROR("%s: MoE predictor NOT loaded: %s\n", __func__, err.c_str());
++            }
++        }
++        if (mc->have_pred && !mc->early_issue) {
++            LLAMA_LOG_WARN("%s: a predictor without LLAMA_MOE_EARLY_ISSUE=1 does nothing; "
++                    "enabling early issue\n", __func__);
++            mc->early_issue = true;
++        }
++
+         // collect the host-resident expert layers, grouped by the device buffer
+         // type of that layer's router (the cache lives next to the router)
+         struct cand { int il; const llama_layer * l; };
+@@ -275,12 +427,17 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+             ls.expert_slot.assign(n_expert, -1);
+             ls.slot_last_use.assign(n_slots, 0);
+             ls.slot_in_flight.assign(n_slots, false);
++            ls.free_slots.resize(n_slots);
++            for (int32_t s = 0; s < n_slots; ++s) {
++                ls.free_slots[s] = n_slots - 1 - s;     // every slot starts empty
++            }
+ 
+             std::vector<int32_t> dummy(n_expert, n_slots);
+             ggml_backend_tensor_set(ls.pub.dev_table,  dummy.data(), 0, n_expert*sizeof(int32_t));
+             ggml_backend_tensor_set(ls.pub.host_table, dummy.data(), 0, n_expert*sizeof(int32_t));
+ 
+             mc->by_up_src[ls.pub.up_src] = &ls - mc->layers.data();
++            mc->by_il[ls.pub.il]         = &ls - mc->layers.data();
+             vram += ggml_nbytes(ls.pub.up_c) + ggml_nbytes(ls.pub.gate_c) + ggml_nbytes(ls.pub.down_c);
+             LLAMA_LOG_DEBUG("moe-cache: init layer %d '%s' %zu bytes/expert\n",
+                     ls.pub.il, ls.pub.up_src->name, ls.pub.up_src->nb[2]);
+@@ -306,6 +463,7 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+                     std::lock_guard<std::mutex> lk(mc->wmtx);
+                     j.done = true;
+                     mc->done.push_back(j);
++                    mc->n_copied++;
+                 }
+             }
+         });
+@@ -314,8 +472,10 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+         g_cache = mc;
+         g_init_done = true;
+ 
+-        LLAMA_LOG_INFO("%s: MoE expert cache enabled: %zu layers x %d slots, %d inserts/step, %.1f MiB device memory\n",
+-                __func__, mc->layers.size(), n_slots, mc->max_inserts, vram/1024.0/1024.0);
++        LLAMA_LOG_INFO("%s: MoE expert cache enabled: %zu layers x %d slots, %d inserts/step, %.1f MiB device memory%s%s\n",
++                __func__, mc->layers.size(), n_slots, mc->max_inserts, vram/1024.0/1024.0,
++                mc->early_issue ? ", early issue" : "",
++                mc->have_pred   ? ", predictor"   : "");
+     }();
+ }
+ 
+@@ -347,6 +507,7 @@ void llama_moe_cache_step() {
+             ls.slot_last_use[j.slot]   = ++mc->clock;
+             ls.slot_in_flight[j.slot]  = false;
+             set_table_entry(ls.pub, j.expert, j.slot);
++            mc->n_published++;
+         }
+         mc->done.clear();
+     }
+@@ -358,49 +519,99 @@ void llama_moe_cache_step() {
+     //    entry now), then hand the slice copies to the worker
+     for (size_t li = 0; li < mc->layers.size(); ++li) {
+         auto & ls = mc->layers[li];
+-        if (ls.pending.empty()) {
+-            continue;
+-        }
+ 
+-        int budget = mc->max_inserts;
+-        for (auto it = ls.pending.rbegin(); it != ls.pending.rend() && budget > 0; ++it, --budget) {
+-            const int32_t id = *it;
+-            if (ls.expert_slot[id] >= 0) {
++        if (!mc->early_issue) {
++            if (ls.pending.empty()) {
+                 continue;
+             }
++            int budget = mc->max_inserts;
++            for (auto it = ls.pending.rbegin(); it != ls.pending.rend() && budget > 0; ++it, --budget) {
++                const int32_t id = *it;
++                if (ls.expert_slot[id] >= 0) {
++                    continue;
++                }
++
++                // victim: an empty non-in-flight slot if any, else the LRU non-in-flight slot
++                int32_t slot = -1;
++                uint64_t best = UINT64_MAX;
++                for (int32_t s = 0; s < mc->n_slots; ++s) {
++                    if (ls.slot_in_flight[s]) {
++                        continue;
++                    }
++                    if (ls.slot_expert[s] < 0) { slot = s; break; }
++                    if (ls.slot_last_use[s] < best) { best = ls.slot_last_use[s]; slot = s; }
++                }
++                if (slot < 0) {
++                    break; // every slot is in flight; try again next step
++                }
++
++                const int32_t victim = ls.slot_expert[slot];
++                if (victim >= 0) {
++                    ls.expert_slot[victim] = -1;
++                    ls.slot_expert[slot]   = -1;
++                    set_table_entry(ls.pub, victim, mc->n_slots);
++                }
++                ls.slot_in_flight[slot] = true;
++
++                std::lock_guard<std::mutex> wlk(mc->wmtx);
++                mc->todo.push_back({li, id, slot});
++                mc->n_scheduled++;
++            }
++            ls.pending.clear();
++            continue;
++        }
+ 
+-            // victim: an empty non-in-flight slot if any, else the LRU non-in-flight slot
++        // Early-issue path: the copies were handed to the worker during the
++        // graph, out of slots freed at an earlier step. All that is left here
++        // is to top the pool back up -- which is an eviction, and therefore a
++        // table write, and therefore has to happen exactly here and nowhere
++        // else.
++        ls.pending.clear();
++        const int32_t pool_target = mc->max_inserts + (mc->have_pred ? mc->predict_top : 0);
++        while ((int32_t) ls.free_slots.size() < pool_target) {
+             int32_t slot = -1;
+             uint64_t best = UINT64_MAX;
+             for (int32_t s = 0; s < mc->n_slots; ++s) {
+-                if (ls.slot_in_flight[s]) {
+-                    continue;
++                if (ls.slot_in_flight[s] || ls.slot_expert[s] < 0) {
++                    continue;               // in flight, or already in the pool
+                 }
+-                if (ls.slot_expert[s] < 0) { slot = s; break; }
+                 if (ls.slot_last_use[s] < best) { best = ls.slot_last_use[s]; slot = s; }
+             }
+             if (slot < 0) {
+-                break; // every slot is in flight; try again next step
++                break;                      // nothing evictable this step
+             }
+-
+             const int32_t victim = ls.slot_expert[slot];
+-            if (victim >= 0) {
+-                ls.expert_slot[victim] = -1;
+-                ls.slot_expert[slot]   = -1;
+-                set_table_entry(ls.pub, victim, mc->n_slots);
+-            }
+-            ls.slot_in_flight[slot] = true;
+-
+-            std::lock_guard<std::mutex> wlk(mc->wmtx);
+-            mc->todo.push_back({li, id, slot});
++            ls.expert_slot[victim] = -1;
++            ls.slot_expert[slot]   = -1;
++            set_table_entry(ls.pub, victim, mc->n_slots);
++            ls.free_slots.push_back(slot);
+         }
+-        ls.pending.clear();
+     }
+     mc->wcv.notify_one();
+ 
+     if (mc->n_steps % 512 == 0) {
+         uint64_t h = 0, m = 0;
+         for (auto & ls : mc->layers) { h += ls.n_hit; m += ls.n_miss; }
++        static int stats = -1;
++        if (stats < 0) {
++            const char * e = getenv("LLAMA_MOE_STATS");
++            stats = e && atoi(e) ? 1 : 0;
++        }
++        if (stats) {
++            uint64_t resident = 0, holes = 0;
++            for (auto & ls : mc->layers) {
++                for (int32_t s2 = 0; s2 < mc->n_slots; ++s2) {
++                    if (ls.slot_expert[s2] >= 0) { resident++; } else { holes++; }
++                }
++            }
++            fprintf(stderr, "moe-cache: steps=%llu hit=%.1f%% resident=%.1f/%d "
++                    "scheduled=%llu copied=%llu published=%llu todo=%zu done=%zu\n",
++                    (unsigned long long) mc->n_steps, h + m ? 100.0*h/(h + m) : 0.0,
++                    (double) resident / (double) mc->layers.size(), mc->n_slots,
++                    (unsigned long long) mc->n_scheduled, (unsigned long long) mc->n_copied,
++                    (unsigned long long) mc->n_published, mc->todo.size(), mc->done.size());
++            fflush(stderr);
++        }
+         LLAMA_LOG_DEBUG("moe-cache: steps=%" PRIu64 " hits=%" PRIu64 " misses=%" PRIu64 " hit-rate=%.1f%%\n",
+                 mc->n_steps, h, m, h + m ? 100.0*h/(h + m) : 0.0);
+     }
