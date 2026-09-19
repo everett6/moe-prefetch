@@ -1,0 +1,38 @@
+{
+ "A_ms": 4.184264935349625,
+ "B_ms_per_miss": 0.046897897188132705,
+ "C_ms_per_upload": 0.1415659208910706,
+ "fit": [
+  {
+   "label": "no-cache",
+   "measured_tok_s": 45.0,
+   "modelled_tok_s": 45.0591362637149,
+   "residual_pct": -0.13124144983336983
+  },
+  {
+   "label": "shipped-inserts2",
+   "measured_tok_s": 33.1,
+   "modelled_tok_s": 33.10129812053523,
+   "residual_pct": -0.0039216605055921155
+  },
+  {
+   "label": "shipped-inserts1",
+   "measured_tok_s": 105.7,
+   "modelled_tok_s": 101.10575791617592,
+   "residual_pct": 4.543996483002535
+  },
+  {
+   "label": "early",
+   "measured_tok_s": 104.0,
+   "modelled_tok_s": 109.33727186502009,
+   "residual_pct": -4.881475249912123
+  },
+  {
+   "label": "early+pred3",
+   "measured_tok_s": 97.1,
+   "modelled_tok_s": 96.44608006326985,
+   "residual_pct": 0.6780160855694287
+  }
+ ],
+ "max_abs_residual_pct": 4.881475249912123
+}

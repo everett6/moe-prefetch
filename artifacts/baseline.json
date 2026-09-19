@@ -1,0 +1,53 @@
+{
+ "recorded_utc": "2026-09-19T06:15:45Z",
+ "purpose": "Frozen reference. Later experiments must not overwrite this file.",
+ "repo": {
+  "moe_prefetch_commit": "facb2e866f97113c0c03d69c821583ad84da2fbf",
+  "llama_cpp_commit": "bccbacdb8945680f1cfc7e6bffd1e59014705750",
+  "llama_cpp_branch": "PR #27861 moe-expert-cache (draft), + local patches"
+ },
+ "hardware": {
+  "gpu": "NVIDIA GeForce RTX 5070",
+  "gpu_vram_mib": 12227,
+  "gpu_power_cap_w": 175.0,
+  "gpu_power_cap_note": "175 W, not the 250 W default: at 250 W this card falls off the PCIe bus with Xid 79",
+  "driver": "595.91.07",
+  "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
+  "cpu_threads": 32,
+  "ram_gb": 30.0,
+  "disk_free_gb": 494
+ },
+ "toolchain": {
+  "nvcc": "Cuda compilation tools, release 13.2, V13.2.86",
+  "gcc": "g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+  "cmake": "cmake version 4.2.3",
+  "python": "Python 3.14.7",
+  "numpy": "2.5.3",
+  "torch": "2.14.0+cu130",
+  "kernel": "7.0.0-31-generic"
+ },
+ "model": {
+  "path": "/home/everett/.lmstudio/models/lmstudio-community/Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+  "arch": "qwen3moe",
+  "params": "30B-A3B",
+  "quant": "Q4_K_M",
+  "n_layers": 48,
+  "n_expert": 128,
+  "n_expert_used": 8,
+  "d_model": 2048,
+  "size_gib": 17.28
+ },
+ "benchmark_method": {
+  "harness": "experiments/d3c_bench.sh",
+  "server": "llama-server -ngl 999 -ncmoe 48 -c 4096 -fa on --no-webui",
+  "request": "POST /completion n_predict=200 temperature=0 top_k=1 seed=0 cache_prompt=false",
+  "metric": "server-reported timings.predicted_per_second",
+  "warmup": "1 request discarded per server instance",
+  "guards": [
+   "port verified free before start",
+   "measured server PID verified to be the one launched",
+   "VRAM checked to confirm --moe-expert-cache actually allocated"
+  ],
+  "guards_note": "Added after an unguarded harness produced a 112.8 tok/s reading for a config that actually runs at 33: curl was answered by a server left over from a previous configuration."
+ }
+}

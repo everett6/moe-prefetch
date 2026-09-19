@@ -1,0 +1,38 @@
+{
+ "reset_utc": "2026-09-19T06:19:49Z",
+ "reason": "Deliberate reset: fresh corpus (v3) and fresh model, no reuse of draft data.",
+ "deleted": [
+  {
+   "path": "experiments/m2_hidden.npz",
+   "bytes": 666727269,
+   "samples": 173991,
+   "what": "draft training corpus (schema v1)"
+  },
+  {
+   "path": "data/corpus",
+   "bytes": 1031252375,
+   "samples": 250038,
+   "what": "partial v2 capture, superseded by the reset"
+  }
+ ],
+ "archived": [
+  {
+   "path": "artifacts/draft_old/predictor-hostfree.bin",
+   "bytes": 6160832,
+   "sha256": "5ac70734e3c16a4e2f1cfaa6a8e5b1bc801578ae6b59cb0dfe466f7d1baee9c5"
+  },
+  {
+   "path": "artifacts/draft_old/predictor-full.bin",
+   "bytes": 14427596,
+   "sha256": "2d8017f825808651ef299fa9a787adfe2f50d00284e7da9609d46596ed652081"
+  }
+ ],
+ "preserved": [
+  "all source code (src/, experiments/*.py, cpp/, tests/)",
+  "experiments/*_result.json -- metrics of the draft runs, no training samples",
+  "docs/ -- including the D1 correction",
+  "artifacts/baseline.json -- frozen environment and baseline record",
+  "git history"
+ ],
+ "archived_note": "The draft predictors are FROZEN ridge weight matrices with no optimizer state, so they cannot continue a training run. They are kept, isolated and out of models/, solely to serve as the DRAFT_OLD arm of the three-way comparison. Nothing may initialise from them."
+}
