@@ -98,3 +98,37 @@ per round.
 
 **Position subsampling destroying the strongest feature.** Caught before the
 capture ran, not after. See `docs/REAL-DATA.md`.
+
+## An early signal, and a problem it exposes
+
+Five shards into the v4 capture, the routing statistics are nothing like v3's:
+
+| | v3 (synthetic) | v4 (real, partial) |
+|---|---|---|
+| experts missing a 66-slot LRU (of 8) | 0.698 | 4.437 |
+| overlap with the previous token | 3.443 | 1.559 |
+
+An 8.7% miss rate against 55%. Real prompts route far more widely and repeat far
+less token-to-token, which is what varied subject matter should do and what a
+corpus of one person's templates could not show.
+
+This bears directly on E5. That verdict -- a perfect predictor is worth
+-0.4 tok/s -- was computed where only 8.7% of expert lookups missed. There is
+much more to avoid at 55%. I expected E5 to survive contact with real data; this
+is the first evidence against that, and it is recorded before R6 runs rather
+than after, so the prediction is on the record either way.
+
+**Two caveats, both mine.** The number is from 82 prompts, and those are the
+first round-robin picks, which skew long and code-heavy. And the stored rows
+over-represent the cold start: the head 16 positions are kept in full, so they
+are ~12% of stored rows against ~3% of a real trajectory, which inflates a
+pooled miss rate. Cold-start rows inflating a pooled figure has already produced
+one wrong number in this project.
+
+**A correctness problem for R6.** E5 replays the trace through PrefetchEnv in
+(prompt, position, layer) order. The stored positions are subsampled, so a
+replay would see gaps and miss more than the real sequence does -- the labels
+are computed on the full trajectory and are fine, but the *replay* is not.
+R6 therefore needs a small dedicated corpus captured with subsampling OFF, used
+only for the economics simulation. Noted here so it is not discovered as a
+surprising result later.
