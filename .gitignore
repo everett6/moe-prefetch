@@ -2,6 +2,7 @@ artifacts/*.bin
 artifacts/ckpt/*
 !artifacts/ckpt/FRESH_SUPERVISED-linearctx-lr1e2.pt
 !artifacts/ckpt/FRESH_REAL_DECODE-linearctx-lr1e2.pt
+!artifacts/ckpt/EVICT_FINAL-linearctx-lr0.01.pt
 !artifacts/ckpt/FRESH_RL-policy.pt
 cpp/build/
 data/
@@ -11,6 +12,7 @@ data/index-v3.npz
 models/*
 !models/predictor-fresh.bin
 !models/predictor-real.bin
+!models/evictor-real.bin
 *.npz
 *.out
 *.pyc
