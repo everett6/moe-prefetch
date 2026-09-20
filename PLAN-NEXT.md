@@ -1,5 +1,17 @@
 # Plan N: what to do next, and why
 
+**Status.** Phase 1: done, falsified (docs/PHASE1-RESULT.md) -- batched
+uploads cut the instrumented copy cost 91.1 -> ~80 µs but moved end-to-end
+throughput +0.2 tok/s on n=69 paired, inside the noise band. Ships anyway
+(strictly not worse, off by an env var). Phase 2: done, confirmed
+(docs/PHASE2-RESULT.md) -- per-layer slot reallocation, same total VRAM,
+measured +3.7 tok/s end to end on n=69 paired (113.8 -> 117.5), meeting the
++3 tok/s acceptance bar. Phase 0 (trace-validated environment) was still never
+done; Phase 2's N2.1/N2.2 leaned on the simulator for a *relative* ranking
+across layers only, and N2.4's real-engine measurement is what actually
+decided it -- see the caveat at the top of docs/PHASE2-RESULT.md before
+trusting any other simulated number in this repo.
+
 ## Where the time actually goes
 
 Everything below is ordered by this table, not by what is interesting to build.

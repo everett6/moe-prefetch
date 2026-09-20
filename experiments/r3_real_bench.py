@@ -72,11 +72,45 @@ CONFIGS = {
     "NEW-BEST-nommap":  (["-ncmoe", "48", "--moe-expert-cache", "72", "--no-mmap"], {}),
 }
 EVICTOR = os.path.join(ROOT, "models", "evictor-real.bin")
-if os.environ.get("WITH_EVICTOR"):
+MODE = "base"
+if os.environ.get("WITH_BATCH"):
+    MODE = "batch"
+    # Phase 1: one stream synchronisation per expert instead of one per slice.
+    # Measured 91.1 -> 73.3 us of worker copy time; whether that reaches
+    # throughput is what this asks.
+    base = ["-ncmoe", "48", "--moe-expert-cache", "56", "--no-mmap"]
+    CONFIGS = {
+        "SYNC-PER-SLICE":  (base, {"LLAMA_MOE_BATCH_UPLOADS": "0"}),
+        "SYNC-PER-EXPERT": (base, {"LLAMA_MOE_BATCH_UPLOADS": "1"}),
+    }
+elif os.environ.get("WITH_EVICTOR"):
+    MODE = "evictor"
     CONFIGS = {
         "LRU-nommap":   (["-ncmoe", "48", "--moe-expert-cache", "72", "--no-mmap"], {}),
         "EVICT-nommap": (["-ncmoe", "48", "--moe-expert-cache", "72", "--no-mmap"],
                          {"LLAMA_MOE_EVICTOR": EVICTOR}),
+    }
+elif os.environ.get("WITH_SLOTS"):
+    MODE = "slots"
+    # Phase 2 / N2.4: same total slot budget (48 layers * 56 = 2688), spent
+    # uniformly vs by the per-layer marginal-value allocation from
+    # p7_slot_allocation.py (artifacts/p7_slot_allocation.json). 56, not
+    # PLAN-NEXT's 72: this GPU is sharing VRAM with a live desktop session,
+    # and uniform 72 measured 11715/12227 MiB -- ~512 MiB before cuBLAS's own
+    # handle allocation, which reproducibly failed on the first decode step
+    # ("the resource allocation failed", cublasCreate_v2). 56 has run stably
+    # all session. The profile is baked in here rather than read from the
+    # json so this file stays runnable standalone; regenerate both together
+    # if the corpus or the VRAM budget changes.
+    base = ["-ncmoe", "48", "--moe-expert-cache", "56", "--no-mmap"]
+    SLOT_PROFILE = (
+        "0:88,1:88,2:72,3:72,5:64,6:48,7:40,10:64,11:64,12:64,13:64,14:48,15:48,"
+        "16:48,18:40,19:40,20:40,23:64,24:64,25:64,27:48,30:32,31:40,32:40,33:48,"
+        "34:64,35:64,36:64,37:64,40:48,43:48,44:48,45:48,46:64"
+    )
+    CONFIGS = {
+        "UNIFORM-56": (base, {}),
+        "REALLOC":    (base, {"LLAMA_MOE_SLOT_PROFILE": SLOT_PROFILE}),
     }
 
 ENV = dict(os.environ)
@@ -292,7 +326,11 @@ def main():
             "per_prompt": R["per_prompt"],
         }
     os.makedirs(ART, exist_ok=True)
-    with open(os.path.join(ART, "r3_real_throughput.json"), "w") as f:
+    # A fixed filename here once silently clobbered a committed WITH_EVICTOR
+    # result when a later WITH_BATCH run finished -- the artifact is named by
+    # mode so different CONFIGS blocks never overwrite each other's result.
+    fname = "r3_real_throughput.json" if MODE == "base" else f"r3_real_throughput_{MODE}.json"
+    with open(os.path.join(ART, fname), "w") as f:
         json.dump(out, f, indent=1)
 
     print("\n=== decode tok/s ===")

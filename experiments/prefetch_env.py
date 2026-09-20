@@ -112,7 +112,15 @@ class PrefetchEnv:
     def __init__(self, capacity=66, max_inserts=2, pool_extra=3, cost=None,
                  victim_fn=None,
                  n_layers=N_LAYERS):
-        self.capacity, self.max_inserts, self.pool_extra = capacity, max_inserts, pool_extra
+        # capacity: an int (every layer gets the same budget, the shipped
+        # behaviour) or a per-layer sequence (N2.1/N2.2 slot-allocation sweep).
+        # Layers never share state -- each keeps its own resident set, free
+        # pool and recency clock -- so a non-uniform capacity list is exactly
+        # as faithful as the uniform case; it just lets one pass answer the
+        # question for every layer at once instead of one engine run per layer.
+        self.cap = ([capacity] * n_layers if isinstance(capacity, (int, float))
+                    else list(capacity))
+        self.max_inserts, self.pool_extra = max_inserts, pool_extra
         self.n_layers = n_layers
         self.cost = cost or fit_cost_model()
         self.victim_fn = victim_fn
@@ -121,19 +129,24 @@ class PrefetchEnv:
     def reset(self):
         self.resident = [set() for _ in range(self.n_layers)]
         self.recency = [dict() for _ in range(self.n_layers)]
-        self.free = [self.capacity for _ in range(self.n_layers)]
+        self.free = [self.cap[L] for L in range(self.n_layers)]
         self.inflight = [dict() for _ in range(self.n_layers)]   # expert -> ready flag
         self.clock = 0
         self.stats = {"hit": 0, "lookup": 0, "uploads": 0, "late": 0, "wasted": 0}
+        self.layer_stats = [{"hit": 0, "lookup": 0, "uploads": 0}
+                            for _ in range(self.n_layers)]
         return self
 
     def observe(self, layer, ids):
         """Layer `layer` routes to `ids`. Returns how many missed."""
         miss = 0
+        ls = self.layer_stats[layer]
         for e in ids:
             self.stats["lookup"] += 1
+            ls["lookup"] += 1
             if e in self.resident[layer]:
                 self.stats["hit"] += 1
+                ls["hit"] += 1
                 self.clock += 1
                 self.recency[layer][e] = self.clock
             else:
@@ -162,7 +175,8 @@ class PrefetchEnv:
         # the ~24 demand uploads a token actually performs were free in the model
         # and charged in reality.
         self.stats["uploads"] += 1
-        if len(self.resident[layer]) >= self.capacity:
+        self.layer_stats[layer]["uploads"] += 1
+        if len(self.resident[layer]) >= self.cap[layer]:
             # Eviction policy is pluggable because it turned out to be the
             # binding constraint, not admission: at 93% residency a correct
             # prefetch still displaces something that is about to be used, and
