@@ -1,0 +1,30 @@
+{
+ "LRU, no prefetch": {
+  "tok_s": 120.68765782031183,
+  "hit": 0.9331098805013116,
+  "uploads_per_token": 20.46379647749511,
+  "tokens": 511,
+  "gain": 0.0
+ },
+ "LRU, oracle prefetch": {
+  "tok_s": 131.66894126612073,
+  "hit": 0.9870352250489237,
+  "uploads_per_token": 22.442270058708417,
+  "tokens": 511,
+  "gain": 10.981283445808899
+ },
+ "Belady, no prefetch": {
+  "tok_s": 173.97702807620834,
+  "hit": 0.9762928342424116,
+  "uploads_per_token": 8.029354207436398,
+  "tokens": 511,
+  "gain": 53.289370255896515
+ },
+ "Belady, oracle prefetch": {
+  "tok_s": 184.33350642841327,
+  "hit": 0.9961017196152725,
+  "uploads_per_token": 8.268101761252446,
+  "tokens": 511,
+  "gain": 63.645848608101446
+ }
+}

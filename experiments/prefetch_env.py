@@ -110,10 +110,12 @@ class PrefetchEnv:
     """
 
     def __init__(self, capacity=66, max_inserts=2, pool_extra=3, cost=None,
+                 victim_fn=None,
                  n_layers=N_LAYERS):
         self.capacity, self.max_inserts, self.pool_extra = capacity, max_inserts, pool_extra
         self.n_layers = n_layers
         self.cost = cost or fit_cost_model()
+        self.victim_fn = victim_fn
         self.reset()
 
     def reset(self):
@@ -161,7 +163,17 @@ class PrefetchEnv:
         # and charged in reality.
         self.stats["uploads"] += 1
         if len(self.resident[layer]) >= self.capacity:
-            victim = min(self.recency[layer], key=self.recency[layer].get)
+            # Eviction policy is pluggable because it turned out to be the
+            # binding constraint, not admission: at 93% residency a correct
+            # prefetch still displaces something that is about to be used, and
+            # those re-fetches cost about three times what wrong predictions do
+            # (artifacts/r7b_gated_replay.json). LRU stays the default so every
+            # earlier number remains reproducible.
+            if self.victim_fn is not None:
+                victim = self.victim_fn(layer, self.resident[layer],
+                                        self.recency[layer])
+            else:
+                victim = min(self.recency[layer], key=self.recency[layer].get)
             self.resident[layer].discard(victim)
             self.recency[layer].pop(victim, None)
         self.resident[layer].add(e)
