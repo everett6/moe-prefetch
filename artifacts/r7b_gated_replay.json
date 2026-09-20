@@ -1,0 +1,125 @@
+{
+ "base": {
+  "decode_tok_s": 120.68765782031183,
+  "decode_hit": 0.9331098805013116,
+  "decode_tokens": 511,
+  "uploads_per_decode_token": 20.46379647749511,
+  "issued": 0,
+  "precision": 0.0
+ },
+ "oracle": {
+  "decode_tok_s": 131.66894126612073,
+  "decode_hit": 0.9870352250489237,
+  "decode_tokens": 511,
+  "uploads_per_decode_token": 22.442270058708417,
+  "issued": 0,
+  "precision": 0.0
+ },
+ "depth": 2,
+ "points": [
+  {
+   "decode_tok_s": 119.965587742389,
+   "decode_hit": 0.936909272598576,
+   "decode_tokens": 511,
+   "uploads_per_decode_token": 21.29941291585127,
+   "issued": 1386,
+   "precision": 0.9170274170274171,
+   "threshold": 0.0,
+   "gain": -0.7220700779228224,
+   "formula_us": 84.7889362497917,
+   "measured_us": -49.87234662491957,
+   "extra_uploads": 0.835616438356162
+  },
+  {
+   "decode_tok_s": 119.965587742389,
+   "decode_hit": 0.936909272598576,
+   "decode_tokens": 511,
+   "uploads_per_decode_token": 21.29941291585127,
+   "issued": 1386,
+   "precision": 0.9170274170274171,
+   "threshold": 0.3,
+   "gain": -0.7220700779228224,
+   "formula_us": 84.7889362497917,
+   "measured_us": -49.87234662491957,
+   "extra_uploads": 0.835616438356162
+  },
+  {
+   "decode_tok_s": 120.0121611754268,
+   "decode_hit": 0.9369196818919932,
+   "decode_tokens": 511,
+   "uploads_per_decode_token": 21.27788649706458,
+   "issued": 1374,
+   "precision": 0.9184861717612809,
+   "threshold": 0.5,
+   "gain": -0.6754966448850297,
+   "formula_us": 84.79405696990912,
+   "measured_us": -46.63748052046479,
+   "extra_uploads": 0.8140900195694698
+  },
+  {
+   "decode_tok_s": 120.06375624539547,
+   "decode_hit": 0.9368416121913644,
+   "decode_tokens": 511,
+   "uploads_per_decode_token": 21.2426614481409,
+   "issued": 1339,
+   "precision": 0.9342793129200896,
+   "threshold": 0.7,
+   "gain": -0.6239015749163599,
+   "formula_us": 90.43340184724032,
+   "measured_us": -43.05675507189122,
+   "extra_uploads": 0.7788649706457917
+  },
+  {
+   "decode_tok_s": 120.1447941494228,
+   "decode_hit": 0.93678436107757,
+   "decode_tokens": 511,
+   "uploads_per_decode_token": 21.195694716242663,
+   "issued": 1299,
+   "precision": 0.947652040030793,
+   "threshold": 0.8,
+   "gain": -0.5428636708890338,
+   "formula_us": 94.13860825440034,
+   "measured_us": -37.43888984934962,
+   "extra_uploads": 0.7318982387475543
+  },
+  {
+   "decode_tok_s": 120.25714454480269,
+   "decode_hit": 0.9365085148020152,
+   "decode_tokens": 511,
+   "uploads_per_decode_token": 21.105675146771038,
+   "issued": 1189,
+   "precision": 0.975609756097561,
+   "threshold": 0.9,
+   "gain": -0.4305132755091421,
+   "formula_us": 98.42690612992737,
+   "measured_us": -29.66284494282867,
+   "extra_uploads": 0.6418786692759291
+  },
+  {
+   "decode_tok_s": 120.37064227888887,
+   "decode_hit": 0.9361285755922888,
+   "decode_tokens": 511,
+   "uploads_per_decode_token": 21.001956947162427,
+   "issued": 1026,
+   "precision": 0.98635477582846,
+   "threshold": 0.95,
+   "gain": -0.3170155414229612,
+   "formula_us": 88.9995089274272,
+   "measured_us": -21.822128900341298,
+   "extra_uploads": 0.5381604696673179
+  },
+  {
+   "decode_tok_s": 120.7155445855039,
+   "decode_hit": 0.9354467668734646,
+   "decode_tokens": 511,
+   "uploads_per_decode_token": 20.747553816046967,
+   "issued": 620,
+   "precision": 0.9967741935483871,
+   "threshold": 0.99,
+   "gain": 0.02788676519207911,
+   "formula_us": 56.163930764156305,
+   "measured_us": 1.9141328777934064,
+   "extra_uploads": 0.28375733855185814
+  }
+ ]
+}

@@ -135,3 +135,58 @@ Recorded because the corrections are most of the value here.
   moved together.
 - **A fixed artifact filename in E5** let a v4 run silently destroy the committed
   v3 result, which I then briefly quoted back as though it were v3's.
+
+---
+
+## 8. Why the predictor cannot be made to pay: the break-even was wrong
+
+§6 left the project with a target: a perfect predictor is worth +11.0 tok/s, the
+model reaches 50.1% precision, the bar is 75%. That framing turned out to be
+wrong, and the correction is the most useful thing in this document.
+
+Running the confidence-gated policy through the full environment — which models
+installation, eviction, the slot pool and the 2-inserts-per-step throttle —
+gives (`artifacts/r7b_gated_replay.json`):
+
+| threshold | issued/tok | precision | break-even says | measured | extra uploads/tok |
+|---|---|---|---|---|---|
+| 0.00 | 2.71 | 91.7% | +85 µs | **−50 µs** | +0.84 |
+| 0.90 | 2.33 | 97.6% | +98 µs | **−30 µs** | +0.64 |
+| 0.99 | 1.21 | **99.7%** | +56 µs | **+2 µs** | +0.28 |
+
+Every one of these clears the 75% bar comfortably. Every one of them loses
+throughput, except the last, which breaks even. Robust across prefetch depths
+2, 4 and 8.
+
+**The break-even formula prices only the wrong prefetches.** `C/(B+C) = 75%`
+asks whether a mistaken upload costs more than the miss it might have avoided.
+It says nothing about what a *correct* prefetch costs — and a correct prefetch
+still evicts a resident expert. In a cache already 93.3% effective, nearly
+everything resident is about to be used again, so the eviction causes a re-fetch
+later.
+
+The arithmetic: at threshold 0, the policy issues 2.71 prefetches per token at
+91.7% precision. Only 0.22 of those are wrong. Yet uploads rise by 0.84 per
+token. The missing ~0.6 are re-fetches of experts that the *correct* prefetches
+evicted — **eviction damage is about three times the direct cost of being
+wrong.**
+
+So the real bar is not 75% precision. It is somewhere near 99.7%, where the
+policy finally stops losing money, and at that precision it issues so little
+(1.21 per token against the ~24 misses per token available) that it captures
+**0% of the +11.0 ceiling**.
+
+### What this means
+
+The predictor does not ship, and now the reason is structural rather than a
+matter of model quality. It is not that this model is not good enough. It is
+that prefetching into a near-optimal LRU cache has to displace something useful
+to insert something useful, and at 93% residency there is nothing cheap left to
+evict. A better model would have to be nearly perfect *and* high-volume at once,
+and §6's oracle is the only thing in that class.
+
+For the record the model does see novelty — 52.2% recall@8 on non-resident
+experts against 6.25% for chance (`artifacts/r7c_why.json`). My first hypothesis
+was that it was blind to exactly the experts that mattered; that is measurably
+false and is recorded as such. It is weaker on absent experts than resident ones
+by 22.5 points, but the reason prefetching fails is eviction, not blindness.
