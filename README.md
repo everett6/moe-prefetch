@@ -89,7 +89,7 @@ and the default insert rate is above the stability threshold.
 | `PLAN.md` | what remains, and the bar it has to clear |
 | `experiments/` | capture, training, RL, benchmarks — each a runnable script |
 | `cpp/` | the predictor's C++ loader and its agreement test |
-| `patches/` | the llama.cpp changes |
+| `patches/` | the llama.cpp changes -- `0001`-`0005` are the individual bugs/features as found (see docs/UPSTREAM-BUGS.md, docs/EVICTION.md); `0006` is the full current diff against `bccbacd` and supersedes all of them for actually reproducing the build (copy `cpp/moe-predictor.{h,cpp}` into `src/` first, then apply `0006` alone) |
 | `artifacts/` | frozen baseline, cost model, manifests, experiment log |
 | `tests/` | format, leakage and numerical-agreement tests |
 

@@ -238,3 +238,125 @@ size_t moe_predictor::top_k_ids(const float * scores, size_t k, int32_t * out) c
     std::copy(idx.begin(), idx.begin() + k, out);
     return k;
 }
+
+
+float moe_predictor::update(int il, const inputs & in, const int32_t * truth,
+                            size_t n_truth, float lr) {
+    if (!has_layer(il) || n_truth == 0) {
+        return 0.0f;
+    }
+    const int32_t slot = index_of[il];
+    const uint32_t E = n_expert;
+
+    // Score with the SAME inputs the prediction used. Recomputed rather than
+    // cached: the caller would otherwise have to keep a 128-float vector per
+    // layer alive across a token, and this is 32 row additions.
+    std::vector<float> s(E);
+    score(il, in, s.data());
+
+    std::vector<uint8_t> y(E, 0);
+    for (size_t i = 0; i < n_truth; ++i) {
+        const int32_t e = truth[i];
+        if (e >= 0 && e < (int32_t) E) {
+            y[e] = 1;
+        }
+    }
+
+    // recall@8 of this prediction, before the update, for reporting
+    float hit = 0.0f;
+    {
+        std::vector<int32_t> top(8);
+        const size_t n = top_k_ids(s.data(), 8, top.data());
+        for (size_t i = 0; i < n; ++i) {
+            hit += y[top[i]] ? 1.0f : 0.0f;
+        }
+        hit /= (float) n_truth;
+    }
+
+    // dL/dscore for logistic loss. The scores are z-scored inside score(), so
+    // this treats the normalised score as the logit -- the same thing the
+    // trained model's loss saw, since training also normalised per row.
+    std::vector<float> g(E);
+    for (uint32_t j = 0; j < E; ++j) {
+        const float p = 1.0f / (1.0f + std::exp(-s[j]));
+        g[j] = (p - (y[j] ? 1.0f : 0.0f)) * lr;
+    }
+
+    float * W = w.data() + (size_t) slot*feat_dim*n_expert;
+    auto apply = [&](const int32_t * ids, size_t n, int32_t off) {
+        if (off < 0) {
+            return;
+        }
+        for (size_t i = 0; i < n; ++i) {
+            const int32_t e = ids[i];
+            if (e < 0 || e >= (int32_t) E) {
+                continue;
+            }
+            float * row = W + (size_t) (off + e)*E;
+            for (uint32_t j = 0; j < E; ++j) {
+                row[j] -= g[j];
+            }
+        }
+    };
+    apply(in.prev,      in.n_prev,      off_prev);
+    apply(in.cur,       in.n_cur,       off_cur);
+    apply(in.below,     in.n_below,     off_below);
+    apply(in.self_prev, in.n_self_prev, off_self_prev);
+
+    float * b = bias.data() + (size_t) slot*E;
+    for (uint32_t j = 0; j < E; ++j) {
+        b[j] -= g[j];
+    }
+    return hit;
+}
+
+
+// Write the weights back in MOEP v3, byte-compatible with what the Python
+// exporter produces, so a file this saves can be loaded by the C++ loader, the
+// Python reader and the verification harness alike. No PCA block is ever
+// written: the cache never uses one, and round-tripping a block the runtime
+// does not populate would be a silent way to produce a file that scores
+// differently from the model that saved it.
+bool moe_predictor::save(const std::string & path, std::string & err) const {
+    if (has_pca) {
+        err = "refusing to save a predictor with a PCA block";
+        return false;
+    }
+    FILE * f = fopen(path.c_str(), "wb");
+    if (!f) {
+        err = "cannot open " + path + " for writing";
+        return false;
+    }
+    auto wr = [&](const void * p, size_t n) { return fwrite(p, 1, n, f) == n; };
+    auto wr_u32 = [&](uint32_t v) { return wr(&v, 4); };
+
+    struct blk { uint32_t kind, off; };
+    std::vector<blk> blocks;
+    if (off_prev      >= 0) blocks.push_back({MOE_PRED_BLOCK_PREV,      (uint32_t) off_prev});
+    if (off_cur       >= 0) blocks.push_back({MOE_PRED_BLOCK_CUR,       (uint32_t) off_cur});
+    if (off_below     >= 0) blocks.push_back({MOE_PRED_BLOCK_BELOW,     (uint32_t) off_below});
+    if (off_self_prev >= 0) blocks.push_back({MOE_PRED_BLOCK_SELF_PREV, (uint32_t) off_self_prev});
+    std::sort(blocks.begin(), blocks.end(),
+              [](const blk & a, const blk & b) { return a.off < b.off; });
+
+    const uint32_t n_present = (uint32_t) layer_of.size();
+    bool ok = wr("MOEP", 4) && wr_u32(3) && wr_u32(d_model) && wr_u32(n_comp) &&
+              wr_u32(n_expert) && wr_u32(n_layers) && wr_u32(top_k) &&
+              wr_u32(feat_dim) && wr_u32(n_present) &&
+              wr_u32((uint32_t) blocks.size()) && wr_u32(0) && wr_u32(0);
+    for (const auto & b : blocks) {
+        ok = ok && wr_u32(b.kind) && wr_u32(b.off) && wr_u32(n_expert);
+    }
+    ok = ok && wr(layer_of.data(), layer_of.size()*4)
+            && wr(prior.data(),    prior.size()*4)
+            && wr(bias.data(),     bias.size()*4)
+            && wr(w.data(),        w.size()*4);
+    if (fclose(f) != 0) {
+        ok = false;
+    }
+    if (!ok) {
+        err = "short write to " + path;
+        return false;
+    }
+    return true;
+}

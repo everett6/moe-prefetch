@@ -84,4 +84,23 @@ struct moe_predictor {
 
     // Top-k expert ids by score, best first. Returns how many were written.
     size_t top_k_ids(const float * scores, size_t k, int32_t * out) const;
+
+    // ---- online learning -------------------------------------------------
+    // One SGD step on the layer's weights from a prediction that has since been
+    // resolved: `in` are the features the prediction was made from, `truth` the
+    // experts the target layer actually routed to.
+    //
+    // The features are multi-hot with ~32 non-zeros out of 512, so the gradient
+    // touches only those 32 rows: 32*128 updates per layer per token, the same
+    // order as scoring. Logistic loss, because the target is a set membership
+    // and squared error on an unbounded score has no reason to be calibrated.
+    //
+    // Returns the recall@8 of the prediction being learned from, so the caller
+    // can watch whether online updates are helping without a second pass.
+    float update(int il, const inputs & in, const int32_t * truth, size_t n_truth,
+                 float lr);
+
+    // Write the current weights back out in MOEP format, so a run's learning
+    // survives it.
+    bool save(const std::string & path, std::string & err) const;
 };
