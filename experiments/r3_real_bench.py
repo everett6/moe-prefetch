@@ -64,11 +64,20 @@ CONTROL = ("Write a detailed explanation of how a B-tree index works in a "
 # Same three configs the 118.2 number came from, so the comparison is prompt-only.
 COMMON = ["-ngl", "999", "-c", str(CTX), "--port", str(PORT),
           "--host", "127.0.0.1", "--no-webui", "-fa", "on"]
+# (cli args, extra environment). The evictor is an env var rather than a flag
+# because it is a research hook in the cache, not a supported llama.cpp option.
 CONFIGS = {
-    "BASELINE-ncmoe22": ["-ncmoe", "22"],
-    "PREV-BEST-mmap":   ["-ncmoe", "48", "--moe-expert-cache", "72"],
-    "NEW-BEST-nommap":  ["-ncmoe", "48", "--moe-expert-cache", "72", "--no-mmap"],
+    "BASELINE-ncmoe22": (["-ncmoe", "22"], {}),
+    "PREV-BEST-mmap":   (["-ncmoe", "48", "--moe-expert-cache", "72"], {}),
+    "NEW-BEST-nommap":  (["-ncmoe", "48", "--moe-expert-cache", "72", "--no-mmap"], {}),
 }
+EVICTOR = os.path.join(ROOT, "models", "evictor-real.bin")
+if os.environ.get("WITH_EVICTOR"):
+    CONFIGS = {
+        "LRU-nommap":   (["-ncmoe", "48", "--moe-expert-cache", "72", "--no-mmap"], {}),
+        "EVICT-nommap": (["-ncmoe", "48", "--moe-expert-cache", "72", "--no-mmap"],
+                         {"LLAMA_MOE_EVICTOR": EVICTOR}),
+    }
 
 ENV = dict(os.environ)
 ENV["CUDA_HOME"] = os.path.expanduser("~/miniconda3/envs/cudabuild")
@@ -133,13 +142,15 @@ def wait_free(timeout=90):
     return False
 
 
-def launch(label, args):
+def launch(label, args, extra_env=None):
     if not wait_free():
         raise RuntimeError(f"{label}: port {PORT} still held -- refusing to measure "
                            "someone else's server")
     log = open(f"/tmp/r3-{label}.log", "w")
+    env = dict(ENV)
+    env.update(extra_env or {})
     p = subprocess.Popen([BIN, "-m", MODEL] + COMMON + args,
-                         stdout=log, stderr=subprocess.STDOUT, env=ENV)
+                         stdout=log, stderr=subprocess.STDOUT, env=env)
     t0 = time.time()
     while time.time() - t0 < 900:
         if p.poll() is not None:
@@ -218,9 +229,9 @@ def main():
     tok_counts, fitted = {}, None
 
     for rnd in range(ROUNDS):
-        for label, args in CONFIGS.items():
+        for label, (args, extra_env) in CONFIGS.items():
             print(f"\n[round {rnd}] {label}", flush=True)
-            p, vram = launch(label, args)
+            p, vram = launch(label, args, extra_env)
             try:
                 if fitted is None:
                     # exact token counts from the model's own tokenizer, once

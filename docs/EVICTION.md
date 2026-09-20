@@ -105,3 +105,75 @@ calibrated (its LRU decode baseline of 120.7 tok/s sits near the 126.2 measured
 end-to-end) and that is still not the same as an end-to-end measurement. Wiring
 the victim choice into `llama-moecache.cpp` and re-running the R3 benchmark is
 the next step, and the number to trust when it exists.
+
+---
+
+## Wired into the engine, and measured: no improvement
+
+The simulated +25.2 tok/s does not survive contact with the real engine.
+
+`patches/0005-eviction-model.patch` adds the evictor to
+`llama-moecache.cpp`: the model is loaded from `LLAMA_MOE_EVICTOR`, scored once
+per layer per step from the four expert-id lists the cache already holds, and
+the victim becomes the lowest-scoring resident expert with recency breaking
+ties. Both eviction sites are covered.
+
+**End to end, real prompts, 3 interleaved rounds, n=69 per arm**
+(`artifacts/r8_evictor_end_to_end.json`):
+
+| config | decode tok/s |
+|---|---|
+| LRU | 127.53 ± 8.12 |
+| learned eviction | 127.25 ± 8.27 |
+
+Paired over the 23 prompts: **−0.28 tok/s**, 95% CI **[−1.32, +0.77]**,
+t = −0.52, and the evictor is faster on 10 of 23 prompts. That is a coin flip.
+With `LLAMA_MOE_EARLY_ISSUE=1` as well: 115.5 against 116.4, also nothing.
+
+### The model is working; it is just not worth anything here
+
+It is not a wiring failure. With the evictor loaded the cache measurably
+changes: hit rate 93.9% → 94.2%, uploads scheduled 15,646 → 14,947 over the same
+deterministic completion. The victims are different and slightly better. 0.3
+points of hit rate is worth a few tenths of a tok/s, which is exactly what was
+measured and is far below the noise floor.
+
+### Where the simulation went wrong
+
+The environment's LRU baseline matched reality well — 130.2 tok/s simulated
+against 127.5 measured — which is why the gain looked credible. The baseline was
+right for the wrong reason.
+
+The engine's observation callback returns early for batches, so **the real cache
+never sees prefill at all**. The simulation replayed every row through it,
+including prefill, where every layer touches all 128 experts. That is a
+pathologically hostile access pattern, and it made LRU look far worse than it is
+in the engine. Re-running with the cache fed decode rows only, as the engine
+does:
+
+| cache is fed | LRU | model | Belady |
+|---|---|---|---|
+| all rows (what P1–P4 did) | 40.9 | +3.9 | +15.1 |
+| decode only (what the engine does) | 133.8 | **+5.2** | +19.5 |
+
+The faithful configuration predicts +5.2, not +25.2, and its LRU baseline of
+133.8 at 94.2% hit is the closest match to the engine's 127.5 at 93.9%.
+
+A gap remains: +5.2 predicted against −0.28 measured, and the paired test is
+sensitive enough (sem 0.53) that +5.2 would have been obvious. So the
+environment is still wrong about something after the prefill correction, and I
+have not isolated what. Candidates not yet eliminated: uploads in the engine are
+asynchronous and published a step or more later, while the environment installs
+them synchronously; and in-flight slots are not evictable, so the real model
+often chooses from a smaller candidate set than the simulation gives it.
+
+### What this leaves
+
+Perfect eviction is still worth +19.5 tok/s in the faithful simulation, so the
+lever is real even if this model does not reach it. What is not real is the
++25.2 figure, and the honest summary of this work is that a simulated result
+was believed one step further than the measurement supported. The end-to-end
+number is the one that counts, and it is zero.
+
+The code stays in the tree, off unless `LLAMA_MOE_EVICTOR` is set, because the
+next attempt should not have to rebuild the wiring — only the model.
