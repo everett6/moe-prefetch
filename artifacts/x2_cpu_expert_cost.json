@@ -1,0 +1,31 @@
+{
+  "model": "/home/everett/.lmstudio/models/lmstudio-community/Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+  "loaded_gib": 1.362,
+  "rows": [
+    {"threads": 1, "experts_per_call": 1, "us_p50": 110.32, "us_p90": 118.04, "us_mean": 111.89, "mib_per_call": 2.725},
+    {"threads": 2, "experts_per_call": 1, "us_p50": 61.70, "us_p90": 68.47, "us_mean": 63.01, "mib_per_call": 2.725},
+    {"threads": 4, "experts_per_call": 1, "us_p50": 53.25, "us_p90": 60.76, "us_mean": 54.24, "mib_per_call": 2.725},
+    {"threads": 6, "experts_per_call": 1, "us_p50": 48.26, "us_p90": 51.61, "us_mean": 47.59, "mib_per_call": 2.725},
+    {"threads": 8, "experts_per_call": 1, "us_p50": 46.93, "us_p90": 49.96, "us_mean": 46.74, "mib_per_call": 2.725},
+    {"threads": 12, "experts_per_call": 1, "us_p50": 47.33, "us_p90": 50.51, "us_mean": 47.13, "mib_per_call": 2.725},
+    {"threads": 16, "experts_per_call": 1, "us_p50": 48.95, "us_p90": 52.14, "us_mean": 48.40, "mib_per_call": 2.725},
+    {"threads": 24, "experts_per_call": 1, "us_p50": 51.80, "us_p90": 54.97, "us_mean": 51.72, "mib_per_call": 2.725},
+    {"threads": 32, "experts_per_call": 1, "us_p50": 53.80, "us_p90": 59.39, "us_mean": 65.92, "mib_per_call": 2.725},
+    {"threads": 16, "experts_per_call": 1, "us_p50": 48.74, "us_p90": 51.72, "us_mean": 48.41, "mib_per_call": 2.725},
+    {"threads": 16, "experts_per_call": 2, "us_p50": 91.63, "us_p90": 97.38, "us_mean": 90.78, "mib_per_call": 5.476},
+    {"threads": 16, "experts_per_call": 3, "us_p50": 127.96, "us_p90": 141.14, "us_mean": 131.18, "mib_per_call": 8.160},
+    {"threads": 16, "experts_per_call": 4, "us_p50": 174.10, "us_p90": 186.92, "us_mean": 172.08, "mib_per_call": 10.971},
+    {"threads": 16, "experts_per_call": 8, "us_p50": 330.96, "us_p90": 370.42, "us_mean": 336.15, "mib_per_call": 21.942},
+    {"threads": 8, "experts_per_call": 1, "us_p50": 47.77, "us_p90": 51.82, "us_mean": 47.99, "mib_per_call": 2.725},
+    {"threads": 8, "experts_per_call": 2, "us_p50": 95.93, "us_p90": 103.97, "us_mean": 95.51, "mib_per_call": 5.476},
+    {"threads": 8, "experts_per_call": 4, "us_p50": 189.93, "us_p90": 205.21, "us_mean": 187.27, "mib_per_call": 10.971},
+    {"threads": 8, "experts_per_call": 8, "us_p50": 364.31, "us_p90": 422.61, "us_mean": 376.95, "mib_per_call": 21.942},
+    {"threads": 4, "experts_per_call": -1, "us_p50": 31.67, "us_p90": 38.73, "us_mean": 0.00, "mib_per_call": 2.531},
+    {"threads": 8, "experts_per_call": -1, "us_p50": 19.52, "us_p90": 23.44, "us_mean": 0.00, "mib_per_call": 2.531},
+    {"threads": 16, "experts_per_call": -1, "us_p50": 14.46, "us_p90": 16.31, "us_mean": 0.00, "mib_per_call": 2.531},
+    {"threads": 8, "experts_per_call": -10, "us_p50": 54.02, "us_p90": 58.92, "us_mean": 0.00, "mib_per_call": 0.000},
+    {"threads": 8, "experts_per_call": -11, "us_p50": 65.85, "us_p90": 75.37, "us_mean": 0.00, "mib_per_call": 0.000},
+    {"threads": 8, "experts_per_call": -12, "us_p50": 62.74, "us_p90": 73.19, "us_mean": 0.00, "mib_per_call": 0.000},
+    {"threads": 8, "experts_per_call": -14, "us_p50": 89.02, "us_p90": 97.29, "us_mean": 0.00, "mib_per_call": 0.000}
+  ]
+}

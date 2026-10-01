@@ -4,11 +4,29 @@ Read on 2026-09-30: [JustVugg/colibri](https://github.com/JustVugg/colibri) at
 `ce370e8` and [antirez/ds4](https://github.com/antirez/ds4) at `0aaea5a`, plus
 the papers they and this project lean on.
 
-**Nothing in this document has been measured on the engine.** It was written
-with the GPU in use by other work. The engine changes compile (syntax and
-semantics, three translation units) and are off by default; the one set of
-numbers below that is new is a trace replay, labelled as such.
-`experiments/next_session.sh` runs every measurement in order.
+**Measured on 2026-09-30 / 10-01.** This document was written before any of it
+had run on the engine. It has now: real prompts, 3 rounds, n = 69 an arm,
+paired by prompt. The outcomes are below and under each item; the text of each
+item is left as it was written, so that what was expected can be read against
+what happened.
+
+| taken from | switch | paired tok/s | verdict |
+|---|---|---|---|
+| colibri | admission by heat (`LLAMA_MOE_ADMIT=heat`) | −3.00 ± 1.13 | rejected |
+| ds4 / 2Q | admission on second miss within 8 tokens (`=window`) | +3.88 ± 0.96 | kept |
+| here | batched table writes | +0.66 ± 0.25 | kept |
+| here | byte-priced slot profile | +2.56 ± 0.66 at −8 MiB | kept |
+| | the three kept, stacked | +6.41 ± 1.06 (112.9 → 119.3) | new exact default |
+| paper 2412.00099 | cache-prior routing, δ = 0.01 | +16.37 ± 1.37 (113.7 → 130.1), perplexity −0.10% ± 0.42% | opt-in |
+
+Two things in this document turned out wrong. The heat gate, the rule the
+replay ranked first, lost: the replay said 89.3% hit and the engine gave
+85.4%. And the "three future hits to break even" arithmetic rested on an
+upload cost of 142 µs; refitted on this run an upload costs 26 µs and a miss
+39. The gate still pays, by less, because it cuts uploads from 25 to 10 a
+token for one point of hit rate. The split profiler answered the question at
+the bottom of this page, and the answer became
+[`superpowers/specs/2026-10-01-graph-resident-decode-design.md`](superpowers/specs/2026-10-01-graph-resident-decode-design.md).
 
 ## Where this project stands against them
 
@@ -18,7 +36,8 @@ They are not built for the same job, so the raw numbers are not a ranking:
 |---|---|---|---|
 | colibri `qwen36` + VRAM tier | RTX 3070, 8 GB | Qwen3.6-35B-A3B int4 | 16.6 tok/s (their Ollama reference on that box: 20.3) |
 | ds4, SSD streaming | M5 Max, 128 GB | GLM 5.3 Flash Q4 / DS4 Flash | 11.9 – 19.3 tok/s |
-| this project | RTX 5070, 12 GB | Qwen3-30B-A3B Q4_K_M | 113.8 – 126 tok/s (R3, real prompts) |
+| this project | RTX 5070, 12 GB | Qwen3-30B-A3B Q4_K_M | 119.3 exact, 130.1 with cache-prior routing (R3, real prompts, 56 slots) |
+| this project | RTX 5070, 12 GB | Qwen3.6-35B-A3B Q4_K_M | 108.0 exact, 127.0 with cache-prior routing (84.0 without the cache) |
 
 colibri and ds4 exist to run models that are far larger than memory (125B to
 2.8T parameters) off an SSD; a 30B model on a 12 GB card is a side case for
@@ -195,12 +214,22 @@ change under CUDA graph capture and was not written blind. The profiler is
 there to say whether it is worth writing: if the CPU split's compute time is
 small against its input wait, there is little to overlap.
 
+**Outcome.** The profiler ran. The CPU chain is 1.9 ms of an 8.8 ms token and
+the cached chain is about 45 µs a layer, so overlap in the scheduler is worth
+about 130 tok/s and still stops the GPU 48 times a token. The design that
+replaced it keeps the token on the GPU and has the host answer misses through
+mapped memory; it is approach C in the spec, with this one as approach B.
+
 ## A 30 – 40B model to try next
 
 [Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) (35.95B, 40
 layers × 256 experts, 8 routed). llama.cpp arch `qwen35moe`, present in this
-checkout. `bartowski/Qwen_Qwen3.6-35B-A3B-GGUF`, Q4_K_M is 20.75 GB. Not
-downloaded. Two things to check on the file before benchmarking:
+checkout. `bartowski/Qwen_Qwen3.6-35B-A3B-GGUF`, Q4_K_M is 20.75 GB.
+**Downloaded and measured on 2026-10-01**: the file has 41 expert layers, all
+cache-eligible; 108.0 tok/s at 96 slots a layer against 84.0 without the
+cache; hit rate 82.9%, as predicted lower. The admission gate measured 0.0 on
+it, the cache prior +18.9. Section 9 of the spec has the table. What was
+written beforehand, two things to check on the file before benchmarking:
 
 - the cache needs separate gate/up/down tensors; a GGUF converted with
   `--fuse-gate-up-exps` disables it silently (`gguf_preflight.py` reports this);

@@ -92,6 +92,11 @@ def score_text(tokens):
     return nll, n, found
 
 
+# TAG keeps a second model's result from overwriting the first's.
+OUT_NAME = ("q1_cache_prior_quality-" + os.environ["TAG"] + ".json") if os.environ.get("TAG") \
+    else "q1_cache_prior_quality.json"
+
+
 def main():
     recs = rb.load_prompts()
     # Long human-written text only: the scored span has to be the author's
@@ -154,9 +159,9 @@ def main():
           "for the miss reduction beside it. Nothing here is on by default.")
 
     os.makedirs(rb.ART, exist_ok=True)
-    with open(os.path.join(rb.ART, "q1_cache_prior_quality.json"), "w") as f:
+    with open(os.path.join(rb.ART, OUT_NAME), "w") as f:
         json.dump(out, f, indent=1)
-    print("wrote artifacts/q1_cache_prior_quality.json")
+    print(f"wrote artifacts/{OUT_NAME}")
 
 
 if __name__ == "__main__":

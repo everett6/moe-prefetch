@@ -1,0 +1,13 @@
+# qwen36-nocache-ncmoe25
+# model: /home/everett/.lmstudio/models/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf
+# args: -ngl 999 -c 4096 -fa on -ncmoe 25 --no-mmap
+# vram after load: 10226 MiB
+# during generation (10 samples): GPU busy 42%, clock 2872 MHz, 107 W
+# decode: 512 tokens, 11.641 ms/token, 85.90 tok/s (server's own timing, whole request)
+# profile blocks printed: 4
+CUMULATIVE: 512 graphs, 52.0 splits/graph, 9300 us/graph inside the scheduler
+  CUDA0        26.0 splits/graph   inputs    240.4 us/graph   compute    507.3 us/graph   (9.2 + 19.5 us/split)
+  CPU          26.0 splits/graph   inputs   2556.7 us/graph   compute   5995.8 us/graph   (98.3 + 230.6 us/split)
+LAST INTERVAL: 128 graphs, 52.0 splits/graph, 8740 us/graph inside the scheduler
+  CUDA0        26.0 splits/graph   inputs    238.9 us/graph   compute    158.4 us/graph   (9.2 + 6.1 us/split)
+  CPU          26.0 splits/graph   inputs   2570.2 us/graph   compute   5772.6 us/graph   (98.9 + 222.0 us/split)

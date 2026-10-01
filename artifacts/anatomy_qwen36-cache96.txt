@@ -1,0 +1,19 @@
+# qwen36-cache96
+# model: /home/everett/.lmstudio/models/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf
+# args: -ngl 999 -c 4096 -fa on -ncmoe 41 --moe-expert-cache 96 --no-mmap
+# vram after load: 10214 MiB
+# during generation (12 samples): GPU busy 72%, clock 2850 MHz, 146 W
+moe-cache: expert weights live in buffer 'CUDA_Host' (host=1)
+moe-cache: batched uploads ENABLED (one sync per expert)
+moe-cache: admission gate off (every miss is uploaded)
+moe-cache: table writes per entry (two synchronous copies per upload)
+moe-cache: steps=512 hit=85.7% resident=95.3/96 scheduled=12354 copied=12327 published=12327 todo=27 done=0
+moe-cache: per token: 46.16 missed, 24.13 uploaded; admission 0 ok / 0 denied; table flushes 0
+# decode: 768 tokens, 8.904 ms/token, 112.31 tok/s (server's own timing, whole request)
+# profile blocks printed: 6
+CUMULATIVE: 768 graphs, 82.0 splits/graph, 8287 us/graph inside the scheduler
+  CUDA0        41.0 splits/graph   inputs    400.2 us/graph   compute    447.3 us/graph   (9.8 + 10.9 us/split)
+  CPU          41.0 splits/graph   inputs   5389.4 us/graph   compute   2050.0 us/graph   (131.4 + 50.0 us/split)
+LAST INTERVAL: 128 graphs, 82.0 splits/graph, 7575 us/graph inside the scheduler
+  CUDA0        41.0 splits/graph   inputs    388.2 us/graph   compute    145.8 us/graph   (9.5 + 3.6 us/split)
+  CPU          41.0 splits/graph   inputs   5397.4 us/graph   compute   1643.5 us/graph   (131.6 + 40.1 us/split)

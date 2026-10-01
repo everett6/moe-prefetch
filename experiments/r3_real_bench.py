@@ -178,13 +178,50 @@ elif os.environ.get("WITH_STACK"):
         "0:88,1:88,3:72,5:64,6:48,7:40,10:72,11:64,12:64,13:64,14:48,15:48,18:40,"
         "19:40,20:40,23:64,24:64,25:64,27:48,30:40,31:40,32:40,34:64,35:64,36:64,"
         "37:64,40:48,43:40,44:48,45:48,46:48")
+    # The gate is WINDOW, not HEAT: the single-switch run on 2026-09-30 measured
+    # HEAT at -3.00 +/- 1.13 tok/s (it starves the cache: 5 uploads a token, 59
+    # misses) and WINDOW at +3.88 +/- 0.96. This was written as HEAT before
+    # either had been measured, and changed before the stack stage ran.
     CONFIGS = {
         "PLAIN-56": (BASE56, {}),
-        "STACK":    (BASE56, {"LLAMA_MOE_SLOT_PROFILE": _prof, "LLAMA_MOE_ADMIT": "heat",
+        "STACK":    (BASE56, {"LLAMA_MOE_SLOT_PROFILE": _prof, "LLAMA_MOE_ADMIT": "window",
                               "LLAMA_MOE_BATCH_TABLES": "1"}),
     }
-    EXPECT = {"PLAIN-56": "admission gate off", "STACK": "admission gate HEAT"}
+    EXPECT = {"PLAIN-56": "admission gate off", "STACK": "admission gate WINDOW"}
+elif os.environ.get("WITH_MODEL"):
+    # A different model end to end: its best no-cache split against the cache
+    # as it ships and the cache with the exact switches that measured positive
+    # on Qwen3-30B (2-in-8 admission, batched table writes). The slot profiles
+    # do not carry over. NCMOE_BASE is the no-cache split that fills the same
+    # VRAM: experiments/gguf_preflight.py gives the sizes, one trial launch
+    # confirms it loads.
+    MODE = "model-" + os.environ["WITH_MODEL"]
+    CONFIGS = {
+        "NOCACHE":     (["-ncmoe", os.environ["NCMOE_BASE"], "--no-mmap"], {}),
+        "CACHE":       (BASE56, {}),
+        "CACHE-TUNED": (BASE56, {"LLAMA_MOE_ADMIT": "window", "LLAMA_MOE_BATCH_TABLES": "1"}),
+    }
+    EXPECT = {"CACHE": "admission gate off", "CACHE-TUNED": "admission gate WINDOW"}
+elif os.environ.get("WITH_OMP"):
+    MODE = "omp"
+    # The CPU chain runs as one OpenMP region per layer, 48 times a token, and
+    # does almost nothing in most of them. Whether the team's wait policy,
+    # placement or size costs anything was never measured on the cache
+    # configuration (AI2 measured thread tuning at 0.99x on full CPU layers,
+    # which is a different regime). No engine change: environment and one flag.
+    CONFIGS = {
+        "OMP-DEFAULT":     (BASE56, {}),
+        "OMP-ACTIVE":      (BASE56, {"OMP_WAIT_POLICY": "active"}),
+        "OMP-ACTIVE-BIND": (BASE56, {"OMP_WAIT_POLICY": "active", "OMP_PROC_BIND": "close",
+                                     "OMP_PLACES": "cores"}),
+        "THREADS-8":       (BASE56 + ["-t", "8"], {"OMP_WAIT_POLICY": "active"}),
+    }
 EXPECT = globals().get("EXPECT", {})
+# A run on another model or slot budget must not overwrite the Qwen3-30B result
+# of the same mode: fixed artifact names have destroyed committed results in
+# this repo three times. TAG goes into the file name.
+if os.environ.get("TAG") and MODE != "base":
+    MODE = MODE + "-" + os.environ["TAG"]
 
 ENV = dict(os.environ)
 ENV["CUDA_HOME"] = os.path.expanduser("~/miniconda3/envs/cudabuild")

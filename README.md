@@ -17,9 +17,45 @@ other far more than one prompt differs from itself.
 
 Qwen3-30B-A3B, RTX 5070 (12 GB, 175 W), Ryzen 9 7950X, 29 GB RAM.
 
+## As of 2026-10-01
+
+The 126.2 above was measured at 72 cache slots a layer. With a desktop session
+sharing the card, 72 no longer allocates, so everything measured since is at 56
+slots, and is lower for that reason.
+
+| at 56 slots, real prompts, n = 69, paired | tok/s |
+|---|---|
+| the cache as it was | 112.9 |
+| + second-miss admission, byte-priced slots, batched table writes (same output) | **119.3** (+6.41 ± 1.06) |
+| + cache-aware routing, δ = 0.01 (output changes; perplexity −0.10% ± 0.42%) | **130.1** (+16.37 ± 1.37 over 113.7) |
+
+`./serve.sh` starts the first; `./serve.sh fast` the second.
+
+**Qwen3.6-35B-A3B** (20.75 GiB at Q4_K_M) runs on the same engine unmodified:
+108.0 tok/s with the cache against 84.0 for the best split without it, and
+127.0 with cache-aware routing at δ = 0.01 (perplexity −0.38% ± 0.68%).
+`MODEL=qwen36 ./serve.sh [fast]`.
+
+The same run corrected this project's cost model, and with it the reasoning in
+the next section. An upload costs 26 µs, not 142; the fixed part of a token is
+76%, not 59%; and that fixed part is the GPU stopping 48 times a token to hand
+a layer to the CPU. The design that follows from it, and the probes showing it
+is feasible on this card, are in
+[`docs/superpowers/specs/2026-10-01-graph-resident-decode-design.md`](docs/superpowers/specs/2026-10-01-graph-resident-decode-design.md).
+Its estimate is about 160 tok/s with unchanged output. It is not built.
+
 ---
 
 ## What this turned out to be about
+
+> **Superseded in part, 2026-10-01.** The cost model in this section was fitted
+> to five points, one of them the cache in its broken state, and that point
+> alone set the 142 µs upload cost. Refitted on 39 observations it is
+> `ms = 6.79 + 0.039 × missed + 0.026 × uploads`. The 75% precision bar and
+> the "−0.4 tok/s for a perfect predictor" both rest on the old upload cost and
+> are withdrawn. The conclusion survives for a different reason: the token
+> waits on the host, not on expert transfers, so moving experts sooner does not
+> shorten it. The section is left as written, as the record.
 
 The project was built to test **asynchronous predictive expert prefetching**: if
 the experts a token is about to need were copied into VRAM before it needed them,

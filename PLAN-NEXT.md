@@ -13,21 +13,41 @@ across layers only, and N2.4's real-engine measurement is what actually
 decided it -- see the caveat at the top of docs/PHASE2-RESULT.md before
 trusting any other simulated number in this repo.
 
-**2026-09-30, no GPU available.** Read colibri and ds4 (docs/COMPETITORS.md)
-and wrote, unmeasured and off by default, what was worth taking: an admission
-gate, batched table writes, heat-file warm start, cache-prior routing,
-probation for predicted uploads, and a scheduler split profiler (the piece of
-Phase 0 that says where the fixed 59% goes). `experiments/next_session.sh`
-measures them in this order, each a paired single-switch A/B:
+**2026-09-30 / 10-01: patch 0007 measured, and this plan's premise replaced.**
+`experiments/next_session.sh` ran in full (paired, real prompts, n = 69 an
+arm). Numbers and method are in
+`docs/superpowers/specs/2026-10-01-graph-resident-decode-design.md`; in short:
 
-1. `profile` -- decompose the fixed term before optimising anything in it
-2. `tables`  -- batched table writes (exact)
-3. `admit`   -- admission gate (exact). Also the direct test of the cost
-   model's C term: the replay says uploads fall by half or more; if throughput
-   does not follow, C is wrong here and the model is refitted, not defended
-4. `slots`   -- byte-priced profile against the slot-count one
-5. `quality`, `prior` -- cache-prior routing, perplexity first, speed second
-6. `stack`   -- only after the single switches
+| switch | paired tok/s | |
+|---|---|---|
+| batched table writes | +0.66 ± 0.25 | keep |
+| admission, heat rule | −3.00 ± 1.13 | rejected |
+| admission, second miss within 8 tokens | +3.88 ± 0.96 | keep |
+| byte-priced slot profile | +2.56 ± 0.66 at −8 MiB | keep |
+| the three kept, stacked | **+6.41 ± 1.06, 112.9 → 119.3** | new exact default |
+| cache-prior routing δ = 0.01 | **+16.37 ± 1.37, 113.7 → 130.1**; perplexity −0.10% ± 0.42% | opt-in |
+
+**The table below this block is wrong and is kept as the record of what was
+believed.** The admission A/B is the first measurement that separates uploads
+from misses on a working cache, and it refits the cost model to
+`ms = 6.79 + 0.039 × missed + 0.026 × uploads` (rms 0.06 ms; the old model's
+error on the same data is 0.94 ms). The fixed term is 76% of the token, not
+59%; an upload costs 26 µs, not 142; no cache policy can pass 147 tok/s. The
+split profiler says what the fixed term is: the GPU waits on the host 48 times
+a token, and handing a layer over costs 35 µs before any missed expert is
+computed. Phase 1 (upload cost) was aimed at a term that is 7% of the token.
+
+What Phase 0 asked for, a check of the simulator against the engine, now
+exists for admission. For first-miss and 2-in-8 the replay got the hit rate
+within a point (90.7% and 88.7% against 90.0% and 89.7% measured) and the
+upload count within 8% and 26% (27.1 and 13.0 a token against 25.0 and 10.3).
+It got the heat gate wrong: it said 89.3% hit and a win; the engine gave 85.4%
+and a loss. So it ranks policies near the engine's own and cannot be trusted
+on one that departs from it.
+
+**Next is the build order in section 10 of that spec**, which supersedes
+Phases 0 to 3 here: a fused host-side expert function, an upload arbiter, then
+the graph-resident decode path with a CPU sidecar. Phase 4 (close-out) stands.
 
 ## Where the time actually goes
 

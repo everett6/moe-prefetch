@@ -1,0 +1,571 @@
+{
+ "context_tokens": 64,
+ "scored_tokens": 128,
+ "n_probs": 64,
+ "deltas": {
+  "0": {
+   "ppl": 8.346051705368993,
+   "nll_per_token": 2.121788577377704,
+   "tokens": 3072,
+   "found_in_top_n": 0.9527994791666666,
+   "vram": "9040 MiB",
+   "cache": {
+    "hit_pct": 91.3,
+    "missed_per_token": 33.29,
+    "uploads_per_token": 20.86,
+    "admit_ok": 0,
+    "admit_denied": 0
+   },
+   "per_text": [
+    {
+     "id": "github_issues:00496",
+     "nll_per_token": 1.4442481436214893
+    },
+    {
+     "id": "so:00223",
+     "nll_per_token": 1.8857906703952096
+    },
+    {
+     "id": "swebench:01397",
+     "nll_per_token": 0.4071112183258292
+    },
+    {
+     "id": "github_issues:00767",
+     "nll_per_token": 2.808309334705598
+    },
+    {
+     "id": "so:00106",
+     "nll_per_token": 1.3936968063803175
+    },
+    {
+     "id": "swebench:01017",
+     "nll_per_token": 1.6008334396865354
+    },
+    {
+     "id": "github_issues:00310",
+     "nll_per_token": 3.2477523018142165
+    },
+    {
+     "id": "so:00212",
+     "nll_per_token": 1.3148449502614152
+    },
+    {
+     "id": "swebench:01282",
+     "nll_per_token": 1.6517851594097834
+    },
+    {
+     "id": "github_issues:00687",
+     "nll_per_token": 1.9477106173455365
+    },
+    {
+     "id": "so:00232",
+     "nll_per_token": 1.7443945233861138
+    },
+    {
+     "id": "swebench:00637",
+     "nll_per_token": 1.5349512604077722
+    },
+    {
+     "id": "no_robots:00139",
+     "nll_per_token": 1.5422929540551267
+    },
+    {
+     "id": "se_decision:00435",
+     "nll_per_token": 2.296587834282491
+    },
+    {
+     "id": "se_decision:00566",
+     "nll_per_token": 2.647695564181763
+    },
+    {
+     "id": "se_decision:00281",
+     "nll_per_token": 2.353139464862579
+    },
+    {
+     "id": "no_robots:00720",
+     "nll_per_token": 2.817334528463107
+    },
+    {
+     "id": "se_decision:00452",
+     "nll_per_token": 2.5351772378509736
+    },
+    {
+     "id": "se_decision:00579",
+     "nll_per_token": 2.9491054386809465
+    },
+    {
+     "id": "se_decision:00086",
+     "nll_per_token": 3.0320057557655673
+    },
+    {
+     "id": "no_robots:00101",
+     "nll_per_token": 2.0374414000544903
+    },
+    {
+     "id": "se_decision:00443",
+     "nll_per_token": 2.765652940806831
+    },
+    {
+     "id": "se_decision:00528",
+     "nll_per_token": 2.2449091107963035
+    },
+    {
+     "id": "se_decision:00295",
+     "nll_per_token": 2.7201552015249035
+    }
+   ]
+  },
+  "0.005": {
+   "ppl": 8.35191171796409,
+   "nll_per_token": 2.1224904609172834,
+   "tokens": 3072,
+   "found_in_top_n": 0.951171875,
+   "vram": "9040 MiB",
+   "cache": {
+    "hit_pct": 93.7,
+    "missed_per_token": 23.9,
+    "uploads_per_token": 15.62,
+    "admit_ok": 0,
+    "admit_denied": 0
+   },
+   "per_text": [
+    {
+     "id": "github_issues:00496",
+     "nll_per_token": 1.44961537601846
+    },
+    {
+     "id": "so:00223",
+     "nll_per_token": 1.893078906507867
+    },
+    {
+     "id": "swebench:01397",
+     "nll_per_token": 0.3921110258839806
+    },
+    {
+     "id": "github_issues:00767",
+     "nll_per_token": 2.790180243385251
+    },
+    {
+     "id": "so:00106",
+     "nll_per_token": 1.3828440586749258
+    },
+    {
+     "id": "swebench:01017",
+     "nll_per_token": 1.5688277772705648
+    },
+    {
+     "id": "github_issues:00310",
+     "nll_per_token": 3.2637704502840283
+    },
+    {
+     "id": "so:00212",
+     "nll_per_token": 1.307106038151523
+    },
+    {
+     "id": "swebench:01282",
+     "nll_per_token": 1.6596582418309893
+    },
+    {
+     "id": "github_issues:00687",
+     "nll_per_token": 1.9511345616479618
+    },
+    {
+     "id": "so:00232",
+     "nll_per_token": 1.7483175447332275
+    },
+    {
+     "id": "swebench:00637",
+     "nll_per_token": 1.5337517418815594
+    },
+    {
+     "id": "no_robots:00139",
+     "nll_per_token": 1.5365995865877493
+    },
+    {
+     "id": "se_decision:00435",
+     "nll_per_token": 2.309912929841744
+    },
+    {
+     "id": "se_decision:00566",
+     "nll_per_token": 2.672420113503586
+    },
+    {
+     "id": "se_decision:00281",
+     "nll_per_token": 2.3467045729166784
+    },
+    {
+     "id": "no_robots:00720",
+     "nll_per_token": 2.8252881976545723
+    },
+    {
+     "id": "se_decision:00452",
+     "nll_per_token": 2.553473804445588
+    },
+    {
+     "id": "se_decision:00579",
+     "nll_per_token": 2.9414059685534397
+    },
+    {
+     "id": "se_decision:00086",
+     "nll_per_token": 3.027110297291074
+    },
+    {
+     "id": "no_robots:00101",
+     "nll_per_token": 2.0490476779519895
+    },
+    {
+     "id": "se_decision:00443",
+     "nll_per_token": 2.768233327825328
+    },
+    {
+     "id": "se_decision:00528",
+     "nll_per_token": 2.2432586738789717
+    },
+    {
+     "id": "se_decision:00295",
+     "nll_per_token": 2.7259199452937537
+    }
+   ],
+   "ppl_change_pct": 0.07021299174707618
+  },
+  "0.01": {
+   "ppl": 8.338015020641906,
+   "nll_per_token": 2.120825180925189,
+   "tokens": 3072,
+   "found_in_top_n": 0.9534505208333334,
+   "vram": "9040 MiB",
+   "cache": {
+    "hit_pct": 95.2,
+    "missed_per_token": 18.33,
+    "uploads_per_token": 12.39,
+    "admit_ok": 0,
+    "admit_denied": 0
+   },
+   "per_text": [
+    {
+     "id": "github_issues:00496",
+     "nll_per_token": 1.4535653808120919
+    },
+    {
+     "id": "so:00223",
+     "nll_per_token": 1.9234971994923455
+    },
+    {
+     "id": "swebench:01397",
+     "nll_per_token": 0.3839889204228186
+    },
+    {
+     "id": "github_issues:00767",
+     "nll_per_token": 2.757949578233678
+    },
+    {
+     "id": "so:00106",
+     "nll_per_token": 1.3724897201026065
+    },
+    {
+     "id": "swebench:01017",
+     "nll_per_token": 1.5663510618151788
+    },
+    {
+     "id": "github_issues:00310",
+     "nll_per_token": 3.2613096343709485
+    },
+    {
+     "id": "so:00212",
+     "nll_per_token": 1.354690667421717
+    },
+    {
+     "id": "swebench:01282",
+     "nll_per_token": 1.6694998309044138
+    },
+    {
+     "id": "github_issues:00687",
+     "nll_per_token": 1.9413521784532024
+    },
+    {
+     "id": "so:00232",
+     "nll_per_token": 1.7436361511428728
+    },
+    {
+     "id": "swebench:00637",
+     "nll_per_token": 1.5291706533374834
+    },
+    {
+     "id": "no_robots:00139",
+     "nll_per_token": 1.5246380223177005
+    },
+    {
+     "id": "se_decision:00435",
+     "nll_per_token": 2.297260950367047
+    },
+    {
+     "id": "se_decision:00566",
+     "nll_per_token": 2.6540716057320566
+    },
+    {
+     "id": "se_decision:00281",
+     "nll_per_token": 2.3552234102553484
+    },
+    {
+     "id": "no_robots:00720",
+     "nll_per_token": 2.811292543282889
+    },
+    {
+     "id": "se_decision:00452",
+     "nll_per_token": 2.540494973352395
+    },
+    {
+     "id": "se_decision:00579",
+     "nll_per_token": 2.953768553313237
+    },
+    {
+     "id": "se_decision:00086",
+     "nll_per_token": 3.036919790873071
+    },
+    {
+     "id": "no_robots:00101",
+     "nll_per_token": 2.042546828567538
+    },
+    {
+     "id": "se_decision:00443",
+     "nll_per_token": 2.75785401358371
+    },
+    {
+     "id": "se_decision:00528",
+     "nll_per_token": 2.2291263826726473
+    },
+    {
+     "id": "se_decision:00295",
+     "nll_per_token": 2.7391062913775386
+    }
+   ],
+   "ppl_change_pct": -0.0962932535143124
+  },
+  "0.02": {
+   "ppl": 8.423048995961038,
+   "nll_per_token": 2.1309718762415177,
+   "tokens": 3072,
+   "found_in_top_n": 0.9524739583333334,
+   "vram": "9040 MiB",
+   "cache": {
+    "hit_pct": 96.8,
+    "missed_per_token": 12.1,
+    "uploads_per_token": 8.56,
+    "admit_ok": 0,
+    "admit_denied": 0
+   },
+   "per_text": [
+    {
+     "id": "github_issues:00496",
+     "nll_per_token": 1.4604475220221158
+    },
+    {
+     "id": "so:00223",
+     "nll_per_token": 1.9659564998323162
+    },
+    {
+     "id": "swebench:01397",
+     "nll_per_token": 0.36566607317687794
+    },
+    {
+     "id": "github_issues:00767",
+     "nll_per_token": 2.787935091248386
+    },
+    {
+     "id": "so:00106",
+     "nll_per_token": 1.3597552380968314
+    },
+    {
+     "id": "swebench:01017",
+     "nll_per_token": 1.5911939639492394
+    },
+    {
+     "id": "github_issues:00310",
+     "nll_per_token": 3.2554026375119136
+    },
+    {
+     "id": "so:00212",
+     "nll_per_token": 1.3738720854431885
+    },
+    {
+     "id": "swebench:01282",
+     "nll_per_token": 1.6643282804900963
+    },
+    {
+     "id": "github_issues:00687",
+     "nll_per_token": 1.9224729250532708
+    },
+    {
+     "id": "so:00232",
+     "nll_per_token": 1.7540981019782258
+    },
+    {
+     "id": "swebench:00637",
+     "nll_per_token": 1.5418950495738186
+    },
+    {
+     "id": "no_robots:00139",
+     "nll_per_token": 1.5563167200301686
+    },
+    {
+     "id": "se_decision:00435",
+     "nll_per_token": 2.3130986421308535
+    },
+    {
+     "id": "se_decision:00566",
+     "nll_per_token": 2.658907099125619
+    },
+    {
+     "id": "se_decision:00281",
+     "nll_per_token": 2.3702927981003086
+    },
+    {
+     "id": "no_robots:00720",
+     "nll_per_token": 2.8084666222948726
+    },
+    {
+     "id": "se_decision:00452",
+     "nll_per_token": 2.552281321763539
+    },
+    {
+     "id": "se_decision:00579",
+     "nll_per_token": 2.958344481030853
+    },
+    {
+     "id": "se_decision:00086",
+     "nll_per_token": 3.041345407898916
+    },
+    {
+     "id": "no_robots:00101",
+     "nll_per_token": 2.0610845959444077
+    },
+    {
+     "id": "se_decision:00443",
+     "nll_per_token": 2.778443641699596
+    },
+    {
+     "id": "se_decision:00528",
+     "nll_per_token": 2.245558830798366
+    },
+    {
+     "id": "se_decision:00295",
+     "nll_per_token": 2.7561614006026502
+    }
+   ],
+   "ppl_change_pct": 0.9225594725529085
+  },
+  "0.05": {
+   "ppl": 8.673867769326785,
+   "nll_per_token": 2.1603148008107858,
+   "tokens": 3072,
+   "found_in_top_n": 0.9485677083333334,
+   "vram": "9040 MiB",
+   "cache": {
+    "hit_pct": 98.6,
+    "missed_per_token": 5.18,
+    "uploads_per_token": 3.78,
+    "admit_ok": 0,
+    "admit_denied": 0
+   },
+   "per_text": [
+    {
+     "id": "github_issues:00496",
+     "nll_per_token": 1.499645966248654
+    },
+    {
+     "id": "so:00223",
+     "nll_per_token": 2.0860319684563535
+    },
+    {
+     "id": "swebench:01397",
+     "nll_per_token": 0.4792785420890784
+    },
+    {
+     "id": "github_issues:00767",
+     "nll_per_token": 2.8299788505380974
+    },
+    {
+     "id": "so:00106",
+     "nll_per_token": 1.3809096274522503
+    },
+    {
+     "id": "swebench:01017",
+     "nll_per_token": 1.6160720118608154
+    },
+    {
+     "id": "github_issues:00310",
+     "nll_per_token": 3.283363071882153
+    },
+    {
+     "id": "so:00212",
+     "nll_per_token": 1.4017310348056267
+    },
+    {
+     "id": "swebench:01282",
+     "nll_per_token": 1.664905929246089
+    },
+    {
+     "id": "github_issues:00687",
+     "nll_per_token": 1.9682037289514973
+    },
+    {
+     "id": "so:00232",
+     "nll_per_token": 1.7508901566316872
+    },
+    {
+     "id": "swebench:00637",
+     "nll_per_token": 1.5384641737605036
+    },
+    {
+     "id": "no_robots:00139",
+     "nll_per_token": 1.5867308224552499
+    },
+    {
+     "id": "se_decision:00435",
+     "nll_per_token": 2.3149271307411254
+    },
+    {
+     "id": "se_decision:00566",
+     "nll_per_token": 2.6967270711041804
+    },
+    {
+     "id": "se_decision:00281",
+     "nll_per_token": 2.425287436751205
+    },
+    {
+     "id": "no_robots:00720",
+     "nll_per_token": 2.787016092504473
+    },
+    {
+     "id": "se_decision:00452",
+     "nll_per_token": 2.561629897058367
+    },
+    {
+     "id": "se_decision:00579",
+     "nll_per_token": 2.9789679309105104
+    },
+    {
+     "id": "se_decision:00086",
+     "nll_per_token": 3.043083980133815
+    },
+    {
+     "id": "no_robots:00101",
+     "nll_per_token": 2.0650257108256937
+    },
+    {
+     "id": "se_decision:00443",
+     "nll_per_token": 2.8045862165299695
+    },
+    {
+     "id": "se_decision:00528",
+     "nll_per_token": 2.2905671277199176
+    },
+    {
+     "id": "se_decision:00295",
+     "nll_per_token": 2.7935307408015433
+    }
+   ],
+   "ppl_change_pct": 3.92779814372477
+  }
+ }
+}

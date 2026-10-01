@@ -1,0 +1,19 @@
+# q4-cache56
+# model: /home/everett/.lmstudio/models/lmstudio-community/Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf
+# args: -ngl 999 -c 4096 -fa on -ncmoe 48 --moe-expert-cache 56 --no-mmap
+# vram after load: 9724 MiB
+# during generation (16 samples): GPU busy 67%, clock 2856 MHz, 140 W
+moe-cache: admission gate off (every miss is uploaded)
+moe-cache: table writes per entry (two synchronous copies per upload)
+moe-cache: steps=512 hit=90.1% resident=55.8/56 scheduled=10764 copied=10755 published=10755 todo=9 done=0
+moe-cache: per token: 37.94 missed, 21.02 uploaded; admission 0 ok / 0 denied; table flushes 0
+moe-cache: steps=1024 hit=92.3% resident=55.9/56 scheduled=18269 copied=18263 published=18263 todo=6 done=0
+moe-cache: per token: 29.41 missed, 17.84 uploaded; admission 0 ok / 0 denied; table flushes 0
+# decode: 1024 tokens, 8.643 ms/token, 115.70 tok/s (server's own timing, whole request)
+# profile blocks printed: 8
+CUMULATIVE: 1024 graphs, 98.0 splits/graph, 8268 us/graph inside the scheduler
+  CUDA0        49.0 splits/graph   inputs    522.0 us/graph   compute    341.8 us/graph   (10.7 + 7.0 us/split)
+  CPU          49.0 splits/graph   inputs   4947.3 us/graph   compute   2456.7 us/graph   (101.0 + 50.1 us/split)
+LAST INTERVAL: 128 graphs, 98.0 splits/graph, 7690 us/graph inside the scheduler
+  CUDA0        49.0 splits/graph   inputs    502.4 us/graph   compute    194.8 us/graph   (10.3 + 4.0 us/split)
+  CPU          49.0 splits/graph   inputs   5053.0 us/graph   compute   1940.1 us/graph   (103.1 + 39.6 us/split)

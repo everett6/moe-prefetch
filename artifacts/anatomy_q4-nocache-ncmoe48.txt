@@ -1,0 +1,13 @@
+# q4-nocache-ncmoe48
+# model: /home/everett/.lmstudio/models/lmstudio-community/Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf
+# args: -ngl 999 -c 4096 -fa on -ncmoe 48 --no-mmap
+# vram after load: 2266 MiB
+# during generation (14 samples): GPU busy 14%, clock 2902 MHz, 59 W
+# decode: 384 tokens, 21.044 ms/token, 47.52 tok/s (server's own timing, whole request)
+# profile blocks printed: 6
+CUMULATIVE: 384 graphs, 98.0 splits/graph, 21114 us/graph inside the scheduler
+  CUDA0        49.0 splits/graph   inputs    432.1 us/graph   compute    606.9 us/graph   (8.8 + 12.4 us/split)
+  CPU          49.0 splits/graph   inputs   2818.2 us/graph   compute  17256.7 us/graph   (57.5 + 352.2 us/split)
+LAST INTERVAL: 64 graphs, 98.0 splits/graph, 20281 us/graph inside the scheduler
+  CUDA0        49.0 splits/graph   inputs    418.1 us/graph   compute    202.4 us/graph   (8.5 + 4.1 us/split)
+  CPU          49.0 splits/graph   inputs   2863.7 us/graph   compute  16797.2 us/graph   (58.4 + 342.8 us/split)
