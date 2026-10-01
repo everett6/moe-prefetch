@@ -125,6 +125,66 @@ def sweep(ix, rows, decode_ok, cost, grid=GRID, max_inserts=2):
     return out
 
 
+def load_expert_bytes(n_layers):
+    """Bytes of one expert (gate + up + down) per layer, from the GGUF header
+    (experiments/gguf_preflight.py wrote it). Q4_K_M is not one quant type: on
+    this model 24 of the 48 layers keep their down-projection in Q6_K, so an
+    expert is 2.92 MiB there and 2.53 MiB elsewhere. The first version of this
+    script counted SLOTS, and the profile it produced moved slots towards the
+    larger layers: it measured +28 MiB of VRAM against uniform, which the
+    Phase 2 write-up called noise and which is exactly this."""
+    path = os.path.join(ART, "expert_bytes_qwen3-30b-a3b-q4km.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        d = json.load(f)
+    return [float(d.get(str(L), 0.0)) or None for L in range(n_layers)]
+
+
+def greedy_allocate_bytes(per_layer_miss8, grid, n_layers, uniform_cap, frozen_layers,
+                           expert_bytes):
+    """The same greedy, priced in bytes: the budget is the VRAM the uniform
+    allocation uses, and a step is worth its miss reduction per BYTE. A layer
+    with no size on record (the frozen one) is charged the mean."""
+    known = [b for b in expert_bytes if b]
+    mean_b = sum(known) / len(known)
+    cost = [b or mean_b for b in expert_bytes]
+    budget = sum(uniform_cap * cost[L] for L in range(n_layers))
+    idx = [0] * n_layers
+    cap = [grid[0]] * n_layers
+    for L in frozen_layers:
+        cap[L] = uniform_cap
+    remaining = budget - sum(cap[L] * cost[L] for L in range(n_layers))
+
+    def step(L):
+        if L in frozen_layers or idx[L] + 1 >= len(grid):
+            return -1.0, 0.0
+        i = idx[L]
+        d_slots = grid[i + 1] - grid[i]
+        d_miss = per_layer_miss8[grid[i]][L] - per_layer_miss8[grid[i + 1]][L]
+        return d_miss / (d_slots * cost[L]), d_slots * cost[L]
+
+    import heapq
+    heap = []
+    for L in range(n_layers):
+        v, c = step(L)
+        if v > 0:
+            heapq.heappush(heap, (-v, L))
+    while heap:
+        _, L = heapq.heappop(heap)
+        v, c = step(L)
+        if v <= 0 or c > remaining:
+            continue
+        idx[L] += 1
+        cap[L] = grid[idx[L]]
+        remaining -= c
+        v, c = step(L)
+        if v > 0:
+            heapq.heappush(heap, (-v, L))
+    used = sum(cap[L] * cost[L] for L in range(n_layers))
+    return cap, used, budget
+
+
 def greedy_allocate(per_layer_miss8, grid, n_layers, total_budget, frozen_layers,
                      frozen_cap):
     """Marginal value of the slot that would move layer L from its current
@@ -269,6 +329,27 @@ def main():
                        if new != old)
     print(f"\nLLAMA_MOE_SLOT_PROFILE=\"{profile}\"")
 
+    # Byte-exact variant: same greedy, priced per byte, at exactly the VRAM the
+    # uniform allocation uses.
+    byte_profile, byte_cap, byte_info = None, None, None
+    eb = load_expert_bytes(ix.n_layers)
+    if eb:
+        byte_cap, used, budget = greedy_allocate_bytes(
+            per_layer_miss8, GRID, ix.n_layers, BASELINE_CAP, frozen_layers, eb)
+        known = [b for b in eb if b]
+        mean_b = sum(known) / len(known)
+        slot_count_bytes = sum(new_cap[L] * (eb[L] or mean_b) for L in range(ix.n_layers))
+        byte_profile = ",".join(f"{L}:{byte_cap[L]}" for L in range(ix.n_layers)
+                                if byte_cap[L] != BASELINE_CAP)
+        byte_info = {"budget_mib": budget / 2**20, "used_mib": used / 2**20,
+                     "slot_count_profile_mib": slot_count_bytes / 2**20}
+        print(f"\n=== priced in bytes (uniform {BASELINE_CAP} = {budget/2**20:.0f} MiB) ===")
+        print(f"slot-count profile above actually uses {slot_count_bytes/2**20:.0f} MiB "
+              f"({(slot_count_bytes-budget)/2**20:+.0f} MiB vs uniform)")
+        print(f"byte-priced profile uses {used/2**20:.0f} MiB "
+              f"({(used-budget)/2**20:+.0f} MiB vs uniform)")
+        print(f"LLAMA_MOE_SLOT_PROFILE=\"{byte_profile}\"")
+
     os.makedirs(ART, exist_ok=True)
     with open(os.path.join(ART, "p7_slot_allocation.json"), "w") as f:
         json.dump({
@@ -279,6 +360,8 @@ def main():
             "predicted": {"tok_s": new_tok_s, "hit": hit, "uploads_per_token": up,
                          "gain_vs_baseline": new_tok_s - baseline["tok_s"]},
             "slot_profile_env": profile,
+            "byte_priced": {"new_cap": byte_cap, "slot_profile_env": byte_profile,
+                            "vram": byte_info},
             "caveat": "Phase 0 (trace-validated environment) was never completed; "
                       "this is a relative, not absolute, comparison. N2.4 end-to-end "
                       "engine measurement is authoritative.",

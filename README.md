@@ -85,11 +85,12 @@ and the default insert rate is above the stability threshold.
 |---|---|
 | `docs/FINAL_RESULTS.md` | numbers, method, limitations |
 | `docs/D1-RESULT.md` | how a headline measurement was wrong by 3.4× |
+| `docs/COMPETITORS.md` | colibri and ds4 read against this engine: what was taken, what was not, and why |
 | `docs/UPSTREAM-BUGS.md` | five bugs found in llama.cpp, four of them silent |
 | `PLAN.md` | what remains, and the bar it has to clear |
 | `experiments/` | capture, training, RL, benchmarks — each a runnable script |
 | `cpp/` | the predictor's C++ loader and its agreement test |
-| `patches/` | the llama.cpp changes -- `0001`-`0005` are the individual bugs/features as found (see docs/UPSTREAM-BUGS.md, docs/EVICTION.md); `0006` is the full current diff against `bccbacd` and supersedes all of them for actually reproducing the build (copy `cpp/moe-predictor.{h,cpp}` into `src/` first, then apply `0006` alone) |
+| `patches/` | the llama.cpp changes; `patches/README.md` says which to apply (0006 then 0007) and which are history |
 | `artifacts/` | frozen baseline, cost model, manifests, experiment log |
 | `tests/` | format, leakage and numerical-agreement tests |
 

@@ -76,11 +76,33 @@ budget optimised here is 56; the method is unchanged.
 | UNIFORM-56 | 113.8 ± 10.99 | 9040 MiB |
 | REALLOC | 117.5 ± 11.60 | 9068 MiB |
 
-**+3.7 tok/s (+3.3%) at equal VRAM** (9068 vs 9040 MiB -- the 28 MiB
-difference is noise, not a real cost; total slot count is identical, only its
-distribution across layers differs).
+**+3.7 tok/s (+3.3%) at 0.3% more VRAM** (9068 vs 9040 MiB).
 
 Consistent across all 3 rounds individually: +5.7, +1.8, +3.5.
+
+**Paired, per prompt** (added 2026-09-30 from the same artifact). The ±11 above
+is how different the prompts are from each other, which is the same in both
+arms and says nothing about the difference between them. Pairing each prompt
+with itself:
+
+| | n | mean | sem | t | better |
+|---|---|---|---|---|---|
+| per prompt, rounds averaged | 23 | +3.65 | 0.77 | 4.72 | 21 of 23 prompts |
+| per (prompt, round) | 69 | +3.65 | 0.71 | 5.14 | 55 of 69 |
+
+So the unpaired reading (about two standard errors) understated it. The same
+analysis on the two null results confirms them as nulls: batched uploads
++0.21 ± 0.33, the eviction model −0.28 ± 0.53.
+
+**Correction: the 28 MiB is real, not noise.** This document first said the
+total slot count was identical so the VRAM must be too. It is not, because a
+slot is not one price: `experiments/gguf_preflight.py` shows 24 of the 48
+layers keep their down-projection in Q6_K, making an expert 2.92 MiB there and
+2.53 MiB elsewhere, and the profile moved slots towards the larger layers.
+Computed from the GGUF header the difference is +28 MiB, exactly what
+`nvidia-smi` reported. `p7_slot_allocation.py` now also prices the allocation
+in bytes; that profile uses 8 MiB *less* than uniform and is the `REALLOC-BYTES`
+arm of `WITH_SLOTS`. It has not been measured yet.
 
 Also a sanity check on the Phase-0 caveat: the simulator predicted +4.5, the
 real engine measured +3.7. Same direction, same order of magnitude, on a

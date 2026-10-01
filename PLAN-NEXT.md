@@ -4,13 +4,30 @@
 uploads cut the instrumented copy cost 91.1 -> ~80 µs but moved end-to-end
 throughput +0.2 tok/s on n=69 paired, inside the noise band. Ships anyway
 (strictly not worse, off by an env var). Phase 2: done, confirmed
-(docs/PHASE2-RESULT.md) -- per-layer slot reallocation, same total VRAM,
+(docs/PHASE2-RESULT.md) -- per-layer slot reallocation, same slot count (+28 MiB of VRAM,
+see the correction in that document),
 measured +3.7 tok/s end to end on n=69 paired (113.8 -> 117.5), meeting the
 +3 tok/s acceptance bar. Phase 0 (trace-validated environment) was still never
 done; Phase 2's N2.1/N2.2 leaned on the simulator for a *relative* ranking
 across layers only, and N2.4's real-engine measurement is what actually
 decided it -- see the caveat at the top of docs/PHASE2-RESULT.md before
 trusting any other simulated number in this repo.
+
+**2026-09-30, no GPU available.** Read colibri and ds4 (docs/COMPETITORS.md)
+and wrote, unmeasured and off by default, what was worth taking: an admission
+gate, batched table writes, heat-file warm start, cache-prior routing,
+probation for predicted uploads, and a scheduler split profiler (the piece of
+Phase 0 that says where the fixed 59% goes). `experiments/next_session.sh`
+measures them in this order, each a paired single-switch A/B:
+
+1. `profile` -- decompose the fixed term before optimising anything in it
+2. `tables`  -- batched table writes (exact)
+3. `admit`   -- admission gate (exact). Also the direct test of the cost
+   model's C term: the replay says uploads fall by half or more; if throughput
+   does not follow, C is wrong here and the model is refitted, not defended
+4. `slots`   -- byte-priced profile against the slot-count one
+5. `quality`, `prior` -- cache-prior routing, perplexity first, speed second
+6. `stack`   -- only after the single switches
 
 ## Where the time actually goes
 

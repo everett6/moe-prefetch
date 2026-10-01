@@ -50,11 +50,18 @@ online updates=100000  recall@8 first20k=0.496  since=0.667   (+0.171)
 `first20k` is recall@8 measured once, on the first 20k updates, with the
 weights the model started with -- a fixed reference point, not something that
 moves. `since` is recall@8 on the most recent window, with whatever weights
-are live *right now*. It climbs from the model's static starting point (49.6%)
-to 66.7% by 100k updates and is still rising, not yet plateaued. That is the
-actual claim being checked: the predictor is measurably better at predicting
-this session's routing than the frozen model it started from, entirely from
-its own online updates, inside one run.
+are live *right now*. It climbs from 49.6% to 66.7% by 100k updates.
+
+**What that number is and is not.** The verification run sent the SAME prompt
+five times at temperature 0, so the model produced the same token sequence
+five times and the predictor was scored on routing it had already been
+updated on. The rise shows that the update path works end to end -- features
+are captured, the gradient moves the weights, the moved weights score
+differently, and the checkpoint is written. It does NOT show that online
+updates make the predictor better at routing it has not seen: on a repeated
+sequence, memorising it is enough. That needs held-out prompts, each sent
+once, and has not been run. (The `since=0.000` on the first line is the
+reporting window being empty, not a recall of zero.)
 
 Also confirmed live in the same run: `slot profile: 4 layers overridden`
 (non-uniform slot counts wired and active) and `batched uploads ENABLED` (see
@@ -64,7 +71,7 @@ Also confirmed live in the same run: `slot profile: 4 layers overridden`
 ## What this does and doesn't establish
 
 It establishes the mechanism is real: online updates change the weights, the
-changed weights measurably predict better, and the async pipeline drains
+changed weights score a repeated sequence better, and the async pipeline drains
 without a backlog under decode load. It does **not** establish that
 online-updated weights beat the static `predictor-real.bin` on end-to-end
 throughput -- the predictor-driven admission path was already shown

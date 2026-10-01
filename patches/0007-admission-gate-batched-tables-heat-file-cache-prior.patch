@@ -1,0 +1,793 @@
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+index e519bdf..1c732fb 100644
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -1593,10 +1593,41 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
+     return true;
+ }
+ 
++// GGML_SCHED_PROFILE=<n>: every n graph computes, print where the wall time of
++// a graph went, per backend. GPU compute is asynchronous, so its cost does not
++// show up in the GPU split's own "launch" time -- it shows up as the wait in
++// the NEXT split's input phase, when that split synchronises to read the
++// result. So for a model whose layers alternate GPU -> CPU -> GPU:
++//   cpu.inputs   = waiting for the GPU to finish + the device-to-host copies
++//   cpu.compute  = the host expert chain itself
++//   gpu.inputs   = waiting for the previous GPU work + host-to-device copies
++//   gpu.launch   = kernel / CUDA-graph launch overhead
++// Off unless the variable is set; the only cost then is one predictable branch
++// per split.
++struct ggml_sched_profile {
++    int      every     = -1;      // -1 = not read yet, 0 = off
++    uint64_t n_graphs  = 0;
++    uint64_t n_splits  = 0;
++    int64_t  us_inputs [GGML_SCHED_MAX_BACKENDS] = {0};
++    int64_t  us_compute[GGML_SCHED_MAX_BACKENDS] = {0};
++    uint64_t splits    [GGML_SCHED_MAX_BACKENDS] = {0};
++};
++static ggml_sched_profile g_sched_profile;
++
+ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
+     GGML_ASSERT(sched);
+     struct ggml_backend_sched_split * splits = sched->splits;
+ 
++    ggml_sched_profile & prof = g_sched_profile;
++    if (prof.every < 0) {
++        const char * e = getenv("GGML_SCHED_PROFILE");
++        prof.every = e ? atoi(e) : 0;
++        if (prof.every < 0) {
++            prof.every = 0;
++        }
++    }
++    const bool profiling = prof.every > 0;
++
+     ggml_tensor * prev_ids_tensor = nullptr;
+     std::vector<int32_t> ids;
+     std::vector<ggml_bitset_t> used_ids;
+@@ -1618,6 +1649,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+             }
+         }
+ 
++        const int64_t prof_t0 = profiling ? ggml_time_us() : 0;
++
+         // copy the input tensors to the split backend
+         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+             ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[input_id]);
+@@ -1741,6 +1774,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+             }
+         }
+ 
++        const int64_t prof_t1 = profiling ? ggml_time_us() : 0;
++
+         if (!sched->callback_eval) {
+             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
+             if (ec != GGML_STATUS_SUCCESS) {
+@@ -1785,9 +1820,35 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+             ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
+         }
+ 
++        if (profiling) {
++            const int64_t prof_t2 = ggml_time_us();
++            prof.us_inputs [split_backend_id] += prof_t1 - prof_t0;
++            prof.us_compute[split_backend_id] += prof_t2 - prof_t1;
++            prof.splits    [split_backend_id]++;
++            prof.n_splits++;
++        }
++
+         prev_backend_id = split_backend_id;
+     }
+ 
++    if (profiling && ++prof.n_graphs % (uint64_t) prof.every == 0) {
++        const double g = (double) prof.n_graphs;
++        fprintf(stderr, "sched-profile: %llu graphs, %.1f splits/graph\n",
++                (unsigned long long) prof.n_graphs, (double) prof.n_splits / g);
++        for (int b = 0; b < sched->n_backends; b++) {
++            if (!prof.splits[b]) {
++                continue;
++            }
++            fprintf(stderr, "sched-profile:   %-10s %6.1f splits/graph  inputs %8.1f us/graph  "
++                    "compute %8.1f us/graph  (%.1f + %.1f us/split)\n",
++                    ggml_backend_name(sched->backends[b]), (double) prof.splits[b] / g,
++                    (double) prof.us_inputs[b] / g, (double) prof.us_compute[b] / g,
++                    (double) prof.us_inputs[b] / (double) prof.splits[b],
++                    (double) prof.us_compute[b] / (double) prof.splits[b]);
++        }
++        fflush(stderr);
++    }
++
+     return GGML_STATUS_SUCCESS;
+ }
+ 
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 717ddd7..d720996 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -2053,6 +2053,23 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         cb(selection_probs, "ffn_moe_probs_masked", il);
+     }
+ 
++    // MoE expert cache, cache-prior routing (opt-in; see llama-moecache.h).
++    // Resident experts get a small bonus in the SELECTION probabilities only:
++    // `probs` is untouched, so the gate weights gathered below are still the
++    // router's own. The conditions are the ones the cache chain itself needs,
++    // so the bonus can only ever be applied on a layer the cache serves.
++    if (selected_experts_in == nullptr && n_tokens == 1 &&
++        !gate_up_exps && gate_exps && down_exps &&
++        !up_exps_b && !gate_exps_b && !down_exps_b &&
++        !up_exps_s && !gate_exps_s && !down_exps_s &&
++        type_op == LLM_FFN_SILU && !weight_before_ffn && loras->empty()) {
++        const llama_moe_cache_layer * mprior = llama_moe_cache_lookup(up_exps);
++        if (mprior && mprior->prior) {
++            selection_probs = ggml_add(ctx0, selection_probs, mprior->prior); // [n_expert, 1]
++            cb(selection_probs, "ffn_moe_probs_cache_prior", il);
++        }
++    }
++
+     // select experts
+     ggml_tensor * selected_experts = selected_experts_in;
+     if (selected_experts == nullptr) {
+diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
+index bb763ef..2365411 100644
+--- a/src/llama-moecache.cpp
++++ b/src/llama-moecache.cpp
+@@ -64,6 +64,30 @@ struct layer_state {
+ 
+     uint64_t n_hit  = 0;
+     uint64_t n_miss = 0;
++
++    // --- admission gate ------------------------------------------------------
++    // Decayed use count: +1 every time the layer routes to an expert, hit or
++    // miss, halved every admit_half steps. Empty unless the heat gate is on.
++    std::vector<float>    heat;
++    // Step index of each expert's last two misses, for the window gate. Empty
++    // unless that gate is on.
++    std::vector<uint64_t> miss_last, miss_prev;
++    // Lifetime use count, halved only when read back from disk. Empty unless a
++    // heat file is configured.
++    std::vector<uint32_t> use_count;
++
++    // A speculative upload is not evidence of reuse. It is published with the
++    // OLDEST recency and protected from eviction until slot_protect, so a wrong
++    // guess costs one slot for one token instead of sitting at the top of the
++    // LRU order for a whole cycle. A real hit promotes it like any other slot.
++    std::vector<uint64_t> slot_protect;
++
++    // --- batched table publication ---------------------------------------------
++    // What dev_table / host_table / prior should contain. With batching on, a
++    // step edits these and writes each changed layer to the device once.
++    std::vector<int32_t>  tbl_mirror;
++    std::vector<float>    prior_mirror;
++    bool                  tbl_dirty = false;
+ };
+ 
+ struct upload_job {
+@@ -71,6 +95,7 @@ struct upload_job {
+     int32_t expert;
+     int32_t slot;
+     bool    done = false;
++    bool    spec = false;   // issued from a prediction, not from a real miss
+ };
+ 
+ struct moe_cache {
+@@ -95,6 +120,44 @@ struct moe_cache {
+     std::atomic<uint64_t> up_n{0};
+     bool                  up_report = false;
+ 
++    // Admission gate. The shipped cache admits on the FIRST miss, and Belady
++    // reaches a better hit rate with 61% fewer uploads, so most of what LRU
++    // uploads is an expert that is used once, paid for, and evicted unused --
++    // after displacing one that was about to be used again. An upload costs
++    // about three misses (C/B = 142/47 us), so an admission has to buy three
++    // future hits to break even.
++    //   0  admit every miss (shipped behaviour)
++    //   1  heat: admit only if the candidate's decayed use count beats the
++    //      victim's by 25% + admit_floor (colibri's eviction guard)
++    //   2  window: admit on the second miss within admit_window steps (the
++    //      2Q / ARC ghost-list rule)
++    // A layer that still has an empty slot always admits.
++    int      admit_mode     = 0;
++    int32_t  admit_half     = 64;
++    float    admit_floor    = 1.0f;
++    int32_t  admit_window   = 8;
++    uint64_t n_admit_ok     = 0;
++    uint64_t n_admit_denied = 0;
++
++    bool     spec_probation = false;
++
++    // Every eviction and every publication used to be its own synchronous
++    // 4-byte host-to-device copy on the decode thread: two per upload, each
++    // ending in a stream synchronise. Batched, a step edits host mirrors and
++    // writes the changed layers with ONE synchronise.
++    bool     batch_tables    = false;
++    uint64_t n_table_flushes = 0;
++    bool (*h2d_tables)(int, void **, const void **, const size_t *, int) = nullptr;
++
++    // Cache-prior routing: the bonus a resident expert gets in the router's
++    // selection probabilities. 0 = off, and then the graph is unchanged.
++    float    cache_prior = 0.0f;
++
++    // Persisted routing heat. Loaded at init to fill the cache before the
++    // first token instead of discovering the hot set one miss at a time, and
++    // written back periodically so the next run starts placed.
++    std::string heat_path;
++
+     std::mutex mtx; // guards pending lists + clock (observe runs during graph exec)
+ 
+     std::vector<layer_state> layers;
+@@ -153,6 +216,9 @@ moe_cache * g_cache = nullptr;
+ std::mutex g_init_mtx;
+ bool g_init_done = false;
+ 
++int32_t lru_resident(const layer_state & ls);
++bool    admit_ok(moe_cache * mc, const layer_state & ls, int32_t id, int32_t victim);
++
+ int parse_layer_from_name(const char * name) {
+     // "blk.<il>.ffn_gate_exps.weight"
+     if (strncmp(name, "blk.", 4) != 0) {
+@@ -172,7 +238,7 @@ int parse_layer_from_name(const char * name) {
+ // it empty. Measured: that inversion cost 4 tok/s and read exactly like "the
+ // predictor does not help".
+ int issue_uploads(moe_cache * mc, size_t li, const int32_t * ids, size_t n, int budget,
+-                  int min_keep = 0) {
++                  int min_keep = 0, bool spec = false) {
+     layer_state & ls = mc->layers[li];
+     int issued = 0;
+     for (size_t i = 0; i < n && issued < budget; ++i) {
+@@ -203,7 +269,9 @@ int issue_uploads(moe_cache * mc, size_t li, const int32_t * ids, size_t n, int
+             const int32_t slot = ls.free_slots.back();
+             ls.free_slots.pop_back();
+             ls.slot_in_flight[slot] = true;
+-            mc->todo.push_back({li, id, slot});
++            upload_job job{li, id, slot};
++            job.spec = spec;
++            mc->todo.push_back(job);
+             mc->n_uploads++;
+             mc->n_scheduled++;
+         }
+@@ -252,12 +320,22 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+                 continue;
+             }
+             observed.push_back(id);
++            if (!ls->heat.empty()) {
++                ls->heat[id] += 1.0f;
++            }
++            if (!ls->use_count.empty()) {
++                ls->use_count[id]++;
++            }
+             const int32_t slot = ls->expert_slot[id];
+             if (slot >= 0) {
+                 ls->n_hit++;
+                 ls->slot_last_use[slot] = ++mc->clock;
+             } else {
+                 ls->n_miss++;
++                if (!ls->miss_last.empty() && ls->miss_last[id] != mc->n_steps) {
++                    ls->miss_prev[id] = ls->miss_last[id];
++                    ls->miss_last[id] = mc->n_steps;
++                }
+                 bool dup = false;
+                 for (int32_t p : ls->pending) {
+                     if (p == id) { dup = true; break; }
+@@ -317,7 +395,24 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+         // not -- that is the locality the cache exists for. Issuing now gives
+         // the copy the rest of this token to complete, instead of the zero
+         // slack it gets when the job is only created at the step boundary.
+-        issue_uploads(mc, li, ls->pending.data(), ls->pending.size(), mc->max_inserts);
++        const int32_t pool_target = mc->max_inserts + (mc->have_pred ? mc->predict_top : 0);
++        // The slot an early upload takes was freed at an earlier step, so the
++        // expert it will end up displacing is whichever one the next top-up
++        // evicts: the current LRU resident. While the layer is still filling,
++        // nothing is displaced and everything is admitted.
++        const int32_t next_victim = mc->admit_mode == 0 ? -1 :
++            ((int32_t) ls->free_slots.size() > pool_target ? -1 : lru_resident(*ls));
++        if (mc->admit_mode == 0) {
++            issue_uploads(mc, li, ls->pending.data(), ls->pending.size(), mc->max_inserts);
++        } else {
++            std::vector<int32_t> admitted;
++            for (int32_t id : ls->pending) {
++                if (ls->expert_slot[id] < 0 && admit_ok(mc, *ls, id, next_victim)) {
++                    admitted.push_back(id);
++                }
++            }
++            issue_uploads(mc, li, admitted.data(), admitted.size(), mc->max_inserts);
++        }
+ 
+         // ...and the predictor names experts the NEXT layer will want, from the
+         // two id lists already on the host. No device readback, no sync.
+@@ -338,8 +433,23 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+                     nls.pend_self.clear();
+                     nls.pend_valid = true;
+                 }
+-                issue_uploads(mc, nit->second, top.data(), n_top, mc->predict_top,
+-                              /*min_keep=*/ mc->max_inserts);
++                size_t n_issue = n_top;
++                if (mc->admit_mode == 1) {
++                    // colibri's guard on speculative loads: a guess may only
++                    // displace something colder than itself
++                    const int32_t nv = (int32_t) nls.free_slots.size() > pool_target
++                                     ? -1 : lru_resident(nls);
++                    n_issue = 0;
++                    for (size_t k = 0; k < n_top; ++k) {
++                        const int32_t id = top[k];
++                        if (id >= 0 && id < (int32_t) nls.expert_slot.size() &&
++                            nls.expert_slot[id] < 0 && admit_ok(mc, nls, id, nv)) {
++                            top[n_issue++] = id;
++                        }
++                    }
++                }
++                issue_uploads(mc, nit->second, top.data(), n_issue, mc->predict_top,
++                              /*min_keep=*/ mc->max_inserts, /*spec=*/ true);
+             }
+         }
+     }
+@@ -397,10 +507,162 @@ void upload_slice(ggml_tensor * dst_c, const ggml_tensor * src, int32_t expert,
+     ggml_backend_tensor_set(dst_c, (const char *) src->data + (size_t) expert*sz, (size_t) slot*dst_c->nb[2], sz);
+ }
+ 
+-void set_table_entry(llama_moe_cache_layer & pub, int32_t expert, int32_t slot_or_dummy) {
++// One table entry changed: expert -> slot, or -> the dummy slot on eviction.
++// The cache-prior entry moves with it, so the router's bonus can never name an
++// expert the tables do not.
++void set_table_entry(moe_cache * mc, layer_state & ls, int32_t expert, int32_t slot_or_dummy) {
+     const int32_t v = slot_or_dummy;
+-    ggml_backend_tensor_set(pub.dev_table,  &v, (size_t) expert*sizeof(int32_t), sizeof(int32_t));
+-    ggml_backend_tensor_set(pub.host_table, &v, (size_t) expert*sizeof(int32_t), sizeof(int32_t));
++    const float   p = v == ls.pub.n_slots ? 0.0f : mc->cache_prior;
++    if (mc->batch_tables) {
++        ls.tbl_mirror[expert] = v;
++        if (ls.pub.prior) {
++            ls.prior_mirror[expert] = p;
++        }
++        ls.tbl_dirty = true;
++        return;
++    }
++    ggml_backend_tensor_set(ls.pub.dev_table,  &v, (size_t) expert*sizeof(int32_t), sizeof(int32_t));
++    ggml_backend_tensor_set(ls.pub.host_table, &v, (size_t) expert*sizeof(int32_t), sizeof(int32_t));
++    if (ls.pub.prior) {
++        ggml_backend_tensor_set(ls.pub.prior, &p, (size_t) expert*sizeof(float), sizeof(float));
++    }
++}
++
++// Write every layer whose tables changed this step. Call only between graph
++// executions: it is the one place the device tables move in batched mode.
++void flush_tables(moe_cache * mc) {
++    if (!mc->batch_tables) {
++        return;
++    }
++    std::vector<void *>       dp;
++    std::vector<const void *> sp;
++    std::vector<size_t>       sz;
++    for (auto & ls : mc->layers) {
++        if (!ls.tbl_dirty) {
++            continue;
++        }
++        const size_t nb = ls.tbl_mirror.size()*sizeof(int32_t);
++        memcpy(ls.pub.host_table->data, ls.tbl_mirror.data(), nb);   // host buffer: plain memory
++        dp.push_back(ls.pub.dev_table->data);
++        sp.push_back(ls.tbl_mirror.data());
++        sz.push_back(nb);
++        if (ls.pub.prior) {
++            dp.push_back(ls.pub.prior->data);
++            sp.push_back(ls.prior_mirror.data());
++            sz.push_back(ls.prior_mirror.size()*sizeof(float));
++        }
++    }
++    if (dp.empty()) {
++        return;
++    }
++    const bool ok = mc->h2d_tables &&
++                    mc->h2d_tables(0, dp.data(), sp.data(), sz.data(), (int) dp.size());
++    for (auto & ls : mc->layers) {
++        if (!ls.tbl_dirty) {
++            continue;
++        }
++        if (!ok) {
++            // no batched copy on this backend: still one write per layer
++            // instead of two per upload
++            ggml_backend_tensor_set(ls.pub.dev_table, ls.tbl_mirror.data(), 0,
++                                    ls.tbl_mirror.size()*sizeof(int32_t));
++            if (ls.pub.prior) {
++                ggml_backend_tensor_set(ls.pub.prior, ls.prior_mirror.data(), 0,
++                                        ls.prior_mirror.size()*sizeof(float));
++            }
++        }
++        ls.tbl_dirty = false;
++    }
++    mc->n_table_flushes++;
++}
++
++// The resident expert LRU would evict next on this layer, or -1.
++int32_t lru_resident(const layer_state & ls) {
++    int32_t  victim = -1;
++    uint64_t best   = UINT64_MAX;
++    for (int32_t s = 0; s < ls.pub.n_slots; ++s) {
++        if (ls.slot_in_flight[s] || ls.slot_expert[s] < 0) {
++            continue;
++        }
++        if (ls.slot_last_use[s] < best) {
++            best   = ls.slot_last_use[s];
++            victim = ls.slot_expert[s];
++        }
++    }
++    return victim;
++}
++
++// Should `id` be uploaded, given that doing so displaces `victim`? victim < 0
++// means nothing is displaced (the layer has room) and the answer is yes.
++bool admit_ok(moe_cache * mc, const layer_state & ls, int32_t id, int32_t victim) {
++    if (mc->admit_mode == 0 || victim < 0) {
++        return true;
++    }
++    bool ok = true;
++    if (mc->admit_mode == 1) {
++        ok = ls.heat[id] > ls.heat[victim]*1.25f + mc->admit_floor;
++    } else if (mc->admit_mode == 2) {
++        ok = ls.miss_prev[id] != UINT64_MAX &&
++             ls.miss_last[id] - ls.miss_prev[id] < (uint64_t) mc->admit_window;
++    }
++    if (ok) { mc->n_admit_ok++; } else { mc->n_admit_denied++; }
++    return ok;
++}
++
++// "moe-heat 1 <n_layers> <n_expert>" then "<il> <expert> <count>" lines. Text,
++// sparse, and refused by name when the dimensions are another model's: a heat
++// table from a different model would place the wrong experts and say nothing.
++size_t load_heat(moe_cache * mc) {
++    FILE * f = fopen(mc->heat_path.c_str(), "r");
++    if (!f) {
++        return 0;
++    }
++    int ver = 0, nl = 0, ne = 0;
++    const int want_ne = mc->layers.empty() ? 0 : (int) mc->layers[0].expert_slot.size();
++    if (fscanf(f, "moe-heat %d %d %d", &ver, &nl, &ne) != 3 || ver != 1 ||
++        nl != (int) mc->layers.size() || ne != want_ne) {
++        fprintf(stderr, "moe-cache: HEAT FILE REFUSED: %s is v%d for %d layers x %d experts, "
++                "this model caches %zu x %d\n", mc->heat_path.c_str(), ver, nl, ne,
++                mc->layers.size(), want_ne);
++        fclose(f);
++        return 0;
++    }
++    int il = 0, e = 0;
++    unsigned c = 0;
++    size_t n = 0;
++    while (fscanf(f, "%d %d %u", &il, &e, &c) == 3) {
++        auto it = mc->by_il.find(il);
++        if (it == mc->by_il.end()) {
++            continue;
++        }
++        layer_state & ls = mc->layers[it->second];
++        if (e < 0 || e >= (int) ls.use_count.size()) {
++            continue;
++        }
++        ls.use_count[e] = c / 2;    // halved on load, so an old workload fades
++        n++;
++    }
++    fclose(f);
++    return n;
++}
++
++bool save_heat(const moe_cache * mc) {
++    const std::string tmp = mc->heat_path + ".tmp";
++    FILE * f = fopen(tmp.c_str(), "w");
++    if (!f) {
++        return false;
++    }
++    const int ne = mc->layers.empty() ? 0 : (int) mc->layers[0].expert_slot.size();
++    fprintf(f, "moe-heat 1 %zu %d\n", mc->layers.size(), ne);
++    for (const auto & ls : mc->layers) {
++        for (size_t e = 0; e < ls.use_count.size(); ++e) {
++            if (ls.use_count[e]) {
++                fprintf(f, "%d %zu %u\n", ls.pub.il, e, ls.use_count[e]);
++            }
++        }
++    }
++    const bool ok = fclose(f) == 0;
++    return ok && rename(tmp.c_str(), mc->heat_path.c_str()) == 0;
+ }
+ 
+ } // namespace
+@@ -478,6 +740,21 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+         if (const char * e = getenv("LLAMA_MOE_PREDICT_TOP")) {
+             mc->predict_top = atoi(e);
+         }
++        if (const char * e = getenv("LLAMA_MOE_ADMIT")) {
++            if (strcmp(e, "heat") == 0)        { mc->admit_mode = 1; }
++            else if (strcmp(e, "window") == 0) { mc->admit_mode = 2; }
++            else if (strcmp(e, "off") != 0 && strcmp(e, "0") != 0 && *e) {
++                fprintf(stderr, "moe-cache: LLAMA_MOE_ADMIT='%s' NOT UNDERSTOOD "
++                        "(heat | window | off) - admitting every miss\n", e);
++            }
++        }
++        if (const char * e = getenv("LLAMA_MOE_ADMIT_HALF"))   { mc->admit_half   = std::max(1, atoi(e)); }
++        if (const char * e = getenv("LLAMA_MOE_ADMIT_FLOOR"))  { mc->admit_floor  = (float) atof(e); }
++        if (const char * e = getenv("LLAMA_MOE_ADMIT_WINDOW")) { mc->admit_window = std::max(1, atoi(e)); }
++        if (const char * e = getenv("LLAMA_MOE_SPEC_PROBATION")) { mc->spec_probation = atoi(e) != 0; }
++        if (const char * e = getenv("LLAMA_MOE_BATCH_TABLES"))   { mc->batch_tables   = atoi(e) != 0; }
++        if (const char * e = getenv("LLAMA_MOE_CACHE_PRIOR"))    { mc->cache_prior    = std::max(0.0f, (float) atof(e)); }
++        if (const char * e = getenv("LLAMA_MOE_HEAT_FILE"))      { mc->heat_path      = e; }
+         if (const char * path = getenv("LLAMA_MOE_EVICTOR")) {
+             std::string err;
+             if (mc->evict.load(path, err)) {
+@@ -572,7 +849,7 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+ 
+         auto alloc_group = [&](ggml_backend_buffer_type_t buft, const std::vector<cand> & cands, bool tables_only) -> bool {
+             ggml_init_params ip = {
+-                /*.mem_size  =*/ ggml_tensor_overhead()*(cands.size()*4 + 8),
++                /*.mem_size  =*/ ggml_tensor_overhead()*(cands.size()*5 + 8),
+                 /*.mem_buffer=*/ nullptr,
+                 /*.no_alloc  =*/ true,
+             };
+@@ -609,6 +886,12 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+                     ls->pub.gate_c = ggml_new_tensor_3d(ctx, g->type, g->ne[0], g->ne[1], ns + 1);
+                     ls->pub.down_c = ggml_new_tensor_3d(ctx, d->type, d->ne[0], d->ne[1], ns + 1);
+                     ls->pub.dev_table = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 1, u->ne[2]);
++                    if (mc->cache_prior > 0.0f) {
++                        // [n_expert, 1]: the shape of the router's probabilities
++                        // for one token, so the add needs no broadcast
++                        ls->pub.prior = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, u->ne[2], 1);
++                        ggml_format_name(ls->pub.prior, "moe_cache_prior.%d", c.il);
++                    }
+                     ggml_format_name(ls->pub.up_c,      "moe_cache_up.%d",   c.il);
+                     ggml_format_name(ls->pub.gate_c,    "moe_cache_gate.%d", c.il);
+                     ggml_format_name(ls->pub.down_c,    "moe_cache_down.%d", c.il);
+@@ -654,6 +937,21 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+             ls.expert_slot.assign(n_expert, -1);
+             ls.slot_last_use.assign(ls.pub.n_slots, 0);
+             ls.slot_in_flight.assign(ls.pub.n_slots, false);
++            ls.slot_protect.assign(ls.pub.n_slots, 0);
++            ls.tbl_mirror.assign(n_expert, ls.pub.n_slots);      // everything -> dummy
++            if (ls.pub.prior) {
++                ls.prior_mirror.assign(n_expert, 0.0f);          // buffer is cleared to 0 too
++            }
++            if (mc->admit_mode == 1) {
++                ls.heat.assign(n_expert, 0.0f);
++            }
++            if (mc->admit_mode == 2) {
++                ls.miss_last.assign(n_expert, UINT64_MAX);
++                ls.miss_prev.assign(n_expert, UINT64_MAX);
++            }
++            if (!mc->heat_path.empty()) {
++                ls.use_count.assign(n_expert, 0);
++            }
+             ls.free_slots.resize(ls.pub.n_slots);
+             for (int32_t s = 0; s < ls.pub.n_slots; ++s) {
+                 ls.free_slots[s] = ls.pub.n_slots - 1 - s;   // every slot starts empty
+@@ -670,6 +968,68 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+                     ls.pub.il, ls.pub.up_src->name, ls.pub.up_src->nb[2]);
+         }
+ 
++        // The batched table write needs the same backend entry point the
++        // batched upload uses, and needs it regardless of LLAMA_MOE_BATCH_UPLOADS.
++        if (ggml_backend_reg_t reg = ggml_backend_reg_by_name("CUDA")) {
++            void * fn = ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_memcpy_h2d_batch");
++            if (fn) {
++                mc->h2d_tables = (bool (*)(int, void **, const void **, const size_t *, int)) fn;
++            }
++        }
++
++        // Warm start. A cold cache discovers its hot set one miss at a time --
++        // max_inserts uploads per layer per token -- so the first few hundred
++        // tokens of a server's life run at a fraction of the steady hit rate.
++        // With a heat file the hottest experts are placed before the first
++        // token. No worker thread exists yet and no graph has run, so these
++        // are plain synchronous copies into slots nothing references.
++        if (!mc->heat_path.empty()) {
++            const size_t n_rec = load_heat(mc);
++            size_t placed = 0;
++            if (n_rec > 0) {
++                const int32_t reserve = mc->early_issue
++                    ? mc->max_inserts + (mc->have_pred ? mc->predict_top : 0) : 0;
++                for (auto & ls : mc->layers) {
++                    const int32_t n_expert = (int32_t) ls.expert_slot.size();
++                    std::vector<int32_t> order(n_expert);
++                    for (int32_t e = 0; e < n_expert; ++e) { order[e] = e; }
++                    std::stable_sort(order.begin(), order.end(), [&](int32_t a, int32_t b) {
++                        return ls.use_count[a] > ls.use_count[b];
++                    });
++                    const int32_t fill = std::max(0, ls.pub.n_slots - reserve);
++                    int32_t slot = 0;
++                    for (int32_t k = 0; k < n_expert && slot < fill; ++k) {
++                        const int32_t e = order[k];
++                        if (ls.use_count[e] == 0) {
++                            break;      // never routed to: not worth a slot on a guess
++                        }
++                        upload_slice(ls.pub.up_c,   ls.pub.up_src,   e, slot);
++                        upload_slice(ls.pub.gate_c, ls.pub.gate_src, e, slot);
++                        upload_slice(ls.pub.down_c, ls.pub.down_src, e, slot);
++                        ls.slot_expert[slot] = e;
++                        ls.expert_slot[e]    = slot;
++                        // hottest = most recent, so LRU evicts the coldest of
++                        // the warm set first
++                        ls.slot_last_use[slot] = (uint64_t) (fill - slot);
++                        set_table_entry(mc, ls, e, slot);
++                        ++slot;
++                        ++placed;
++                    }
++                    mc->clock = std::max<uint64_t>(mc->clock, (uint64_t) fill);
++                    ls.free_slots.clear();
++                    for (int32_t f = ls.pub.n_slots - 1; f >= slot; --f) {
++                        ls.free_slots.push_back(f);     // lowest free slot on top, as at init
++                    }
++                }
++                flush_tables(mc);
++            }
++            // Loud either way: a warm start that silently found no file is a
++            // cold start, and the two must not look the same in a log.
++            fprintf(stderr, "moe-cache: heat file %s: %zu records, %zu experts placed before the first token%s\n",
++                    mc->heat_path.c_str(), n_rec, placed,
++                    n_rec ? "" : " (COLD START - file missing, empty or refused)");
++        }
++
+         // Measured: 1, 2, 3, 4 and 6 threads give 114.2, 113.0, 110.8, 111.7 and
+         // 109.4 tok/s. More threads do not help and trend slightly worse -- the
+         // copies already overlap with compute on their own thread, and the limit
+@@ -766,6 +1126,31 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+             mc->up_report = atoi(e) != 0;
+         }
+ 
++        // One line per optional mechanism, on or off. Every no-op experiment in
++        // this project so far was a switch that silently did not take effect.
++        if (mc->admit_mode == 1) {
++            fprintf(stderr, "moe-cache: admission gate HEAT (half-life %d steps, floor %g)\n",
++                    mc->admit_half, mc->admit_floor);
++        } else if (mc->admit_mode == 2) {
++            fprintf(stderr, "moe-cache: admission gate WINDOW (second miss within %d steps)\n",
++                    mc->admit_window);
++        } else {
++            fprintf(stderr, "moe-cache: admission gate off (every miss is uploaded)\n");
++        }
++        fprintf(stderr, "moe-cache: table writes %s\n",
++                !mc->batch_tables ? "per entry (two synchronous copies per upload)"
++                : mc->h2d_tables  ? "BATCHED (one synchronise per step)"
++                                  : "batched per layer (no batched copy on this backend)");
++        if (mc->cache_prior > 0.0f) {
++            fprintf(stderr, "moe-cache: CACHE-PRIOR ROUTING delta=%g - THIS CHANGES MODEL OUTPUT: "
++                    "a resident expert may replace one the router ranked up to delta higher\n",
++                    mc->cache_prior);
++        }
++        if (mc->spec_probation) {
++            fprintf(stderr, "moe-cache: speculative uploads enter on probation\n");
++        }
++        fflush(stderr);
++
+         ggml_set_moe_obs_callback(moe_obs_cb, mc);
+         g_cache = mc;
+         g_init_done = true;
+@@ -802,9 +1187,17 @@ void llama_moe_cache_step() {
+             auto & ls = mc->layers[j.layer_idx];
+             ls.slot_expert[j.slot]     = j.expert;
+             ls.expert_slot[j.expert]   = j.slot;
+-            ls.slot_last_use[j.slot]   = ++mc->clock;
++            if (j.spec && mc->spec_probation) {
++                // n_steps is incremented just below, so this protects the slot
++                // through the top-up of THIS step and the token that follows,
++                // and no further.
++                ls.slot_last_use[j.slot] = 1;
++                ls.slot_protect[j.slot]  = mc->n_steps + 1;
++            } else {
++                ls.slot_last_use[j.slot] = ++mc->clock;
++            }
+             ls.slot_in_flight[j.slot]  = false;
+-            set_table_entry(ls.pub, j.expert, j.slot);
++            set_table_entry(mc, ls, j.expert, j.slot);
+             mc->n_published++;
+         }
+         mc->done.clear();
+@@ -830,9 +1223,10 @@ void llama_moe_cache_step() {
+             // like a model that does not help.
+             std::vector<float> esc;
+             const bool use_model = evict_scores(mc, ls, esc);
+-            for (auto it = ls.pending.rbegin(); it != ls.pending.rend() && budget > 0; ++it, --budget) {
++            for (auto it = ls.pending.rbegin(); it != ls.pending.rend() && budget > 0; ++it) {
+                 const int32_t id = *it;
+                 if (ls.expert_slot[id] >= 0) {
++                    --budget;
+                     continue;
+                 }
+ 
+@@ -846,6 +1240,9 @@ void llama_moe_cache_step() {
+                         continue;
+                     }
+                     if (ls.slot_expert[s] < 0) { slot = s; break; }
++                    if (ls.slot_protect[s] >= mc->n_steps) {
++                        continue;   // a speculative upload still on probation
++                    }
+                     if (use_model) {
+                         const float sc = esc[ls.slot_expert[s]];
+                         if (sc < best_score ||
+@@ -861,10 +1258,14 @@ void llama_moe_cache_step() {
+                 }
+ 
+                 const int32_t victim = ls.slot_expert[slot];
++                if (!admit_ok(mc, ls, id, victim)) {
++                    continue;   // denied: the victim stays, and no budget is spent
++                }
++                --budget;
+                 if (victim >= 0) {
+                     ls.expert_slot[victim] = -1;
+                     ls.slot_expert[slot]   = -1;
+-                    set_table_entry(ls.pub, victim, ls.pub.n_slots);
++                    set_table_entry(mc, ls, victim, ls.pub.n_slots);
+                 }
+                 ls.slot_in_flight[slot] = true;
+ 
+@@ -907,6 +1308,9 @@ void llama_moe_cache_step() {
+                 if (ls.slot_in_flight[s] || ls.slot_expert[s] < 0) {
+                     continue;               // in flight, or already in the pool
+                 }
++                if (ls.slot_protect[s] >= mc->n_steps) {
++                    continue;               // a speculative upload still on probation
++                }
+                 if (use_model) {
+                     // lowest predicted chance of being wanted again; recency
+                     // breaks ties, which matters because the model gives many
+@@ -927,7 +1331,7 @@ void llama_moe_cache_step() {
+             const int32_t victim = ls.slot_expert[slot];
+             ls.expert_slot[victim] = -1;
+             ls.slot_expert[slot]   = -1;
+-            set_table_entry(ls.pub, victim, ls.pub.n_slots);
++            set_table_entry(mc, ls, victim, ls.pub.n_slots);
+             ls.free_slots.push_back(slot);
+         }
+     }
+@@ -940,6 +1344,25 @@ void llama_moe_cache_step() {
+         }
+     }
+ 
++    // Heat decays on a clock, not per use, so an expert that stops being
++    // routed to loses its claim on a slot within a few hundred tokens.
++    if (mc->admit_mode == 1 && mc->admit_half > 0 && mc->n_steps % (uint64_t) mc->admit_half == 0) {
++        for (auto & ls : mc->layers) {
++            for (float & h : ls.heat) {
++                h *= 0.5f;
++            }
++        }
++    }
++
++    // Every table edit of this step reaches the device here, in one transfer.
++    flush_tables(mc);
++
++    if (!mc->heat_path.empty() && mc->n_steps % 512 == 0) {
++        if (!save_heat(mc)) {
++            fprintf(stderr, "moe-cache: heat file write FAILED: %s\n", mc->heat_path.c_str());
++        }
++    }
++
+     mc->wcv.notify_all();
+ 
+     if (mc->n_steps % 512 == 0) {
+@@ -963,6 +1386,15 @@ void llama_moe_cache_step() {
+                     (double) resident / (double) mc->layers.size(), mc->n_slots,
+                     (unsigned long long) mc->n_scheduled, (unsigned long long) mc->n_copied,
+                     (unsigned long long) mc->n_published, mc->todo.size(), mc->done.size());
++            // The two numbers every experiment here needs and had to derive:
++            // how many experts a token misses, and how many it uploads.
++            fprintf(stderr, "moe-cache: per token: %.2f missed, %.2f uploaded; "
++                    "admission %llu ok / %llu denied; table flushes %llu\n",
++                    (double) m / (double) mc->n_steps,
++                    (double) mc->n_scheduled / (double) mc->n_steps,
++                    (unsigned long long) mc->n_admit_ok,
++                    (unsigned long long) mc->n_admit_denied,
++                    (unsigned long long) mc->n_table_flushes);
+             fflush(stderr);
+         }
+         LLAMA_LOG_DEBUG("moe-cache: steps=%" PRIu64 " hits=%" PRIu64 " misses=%" PRIu64 " hit-rate=%.1f%%\n",
+diff --git a/src/llama-moecache.h b/src/llama-moecache.h
+index ed739f9..847a580 100644
+--- a/src/llama-moecache.h
++++ b/src/llama-moecache.h
+@@ -48,6 +48,15 @@ struct llama_moe_cache_layer {
+     // expert id -> slot (or n_slots when uncached); I32 [1, n_expert]
+     ggml_tensor * dev_table  = nullptr;
+     ggml_tensor * host_table = nullptr;
++
++    // Cache-prior routing (opt-in, LLAMA_MOE_CACHE_PRIOR): F32 [n_expert, 1] on
++    // the device, delta for an expert that is resident and 0 otherwise. Added
++    // to the router's SELECTION probabilities only -- the gate weights are
++    // still gathered from the unbiased ones -- so a resident expert can
++    // displace a non-resident one only when the router ranked them within
++    // delta of each other. nullptr when the feature is off, and then the
++    // graph is byte-for-byte the one it was before.
++    ggml_tensor * prior = nullptr;
+ };
+ 
+ // build the cache for every host-resident expert layer of the model.

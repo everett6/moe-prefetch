@@ -48,8 +48,14 @@ PROMPTDIR = os.path.join(ROOT, "data", "prompts")
 ART = os.path.join(ROOT, "artifacts")
 
 BIN = "/home/everett/llama.cpp-build/build/bin/llama-server"
-MODEL = ("/home/everett/.lmstudio/models/lmstudio-community/"
+MODEL = os.environ.get("MODEL", "/home/everett/.lmstudio/models/lmstudio-community/"
          "Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf")
+# A different MoE model needs its own block count and slot budget; run
+# experiments/gguf_preflight.py on the file first, it prints both. The slot
+# profiles and the predictor/evictor weights are fitted to Qwen3-30B-A3B and do
+# NOT carry over -- the admission gate, batched tables and cache prior do.
+NCMOE = os.environ.get("NCMOE", "48")
+SLOTS = os.environ.get("SLOTS", "56")
 PORT = int(os.environ.get("PORT", "8099"))
 N_PREDICT = int(os.environ.get("N_PREDICT", "200"))
 ROUNDS = int(os.environ.get("ROUNDS", "3"))
@@ -108,10 +114,77 @@ elif os.environ.get("WITH_SLOTS"):
         "16:48,18:40,19:40,20:40,23:64,24:64,25:64,27:48,30:32,31:40,32:40,33:48,"
         "34:64,35:64,36:64,37:64,40:48,43:48,44:48,45:48,46:64"
     )
+    # The profile above was allocated by SLOT COUNT, and on this GGUF a slot is
+    # not one price: 24 layers keep a Q6_K down-projection (2.92 MiB an expert
+    # against 2.53). It uses +28 MiB over uniform. This one is the same greedy
+    # priced in bytes, at -8 MiB (artifacts/p7_slot_allocation.json).
+    SLOT_PROFILE_BYTES = (
+        "0:88,1:88,3:72,5:64,6:48,7:40,10:72,11:64,12:64,13:64,14:48,15:48,18:40,"
+        "19:40,20:40,23:64,24:64,25:64,27:48,30:40,31:40,32:40,34:64,35:64,36:64,"
+        "37:64,40:48,43:40,44:48,45:48,46:48"
+    )
     CONFIGS = {
-        "UNIFORM-56": (base, {}),
-        "REALLOC":    (base, {"LLAMA_MOE_SLOT_PROFILE": SLOT_PROFILE}),
+        "UNIFORM-56":    (base, {}),
+        "REALLOC":       (base, {"LLAMA_MOE_SLOT_PROFILE": SLOT_PROFILE}),
+        "REALLOC-BYTES": (base, {"LLAMA_MOE_SLOT_PROFILE": SLOT_PROFILE_BYTES}),
     }
+    EXPECT = {"REALLOC": "slot profile:", "REALLOC-BYTES": "slot profile:"}
+
+# The modes below were written on 2026-09-30 with the GPU in use by other work,
+# so NONE of them has been run. Each arm differs from its baseline by exactly
+# one switch, and every switch prints a banner at server start, which launch()
+# checks for -- an arm whose switch did not take effect is refused, not measured.
+BASE56 = ["-ncmoe", NCMOE, "--moe-expert-cache", SLOTS, "--no-mmap"]
+if os.environ.get("WITH_ADMIT"):
+    MODE = "admit"
+    # Does upload COUNT cost throughput? p8_admission.py (simulated) says an
+    # admission gate cuts uploads ~60% for ~1 point of hit rate. Phase 1 showed
+    # upload DURATION does not matter. This is the experiment that separates the
+    # two: if uploads fall and throughput does not move, the cost model's C term
+    # is wrong at this operating point and has to be refitted.
+    CONFIGS = {
+        "ADMIT-ALL":    (BASE56, {}),
+        "ADMIT-HEAT":   (BASE56, {"LLAMA_MOE_ADMIT": "heat"}),
+        "ADMIT-WINDOW": (BASE56, {"LLAMA_MOE_ADMIT": "window"}),
+    }
+    EXPECT = {"ADMIT-ALL": "admission gate off", "ADMIT-HEAT": "admission gate HEAT",
+              "ADMIT-WINDOW": "admission gate WINDOW"}
+elif os.environ.get("WITH_TABLES"):
+    MODE = "tables"
+    # Two synchronous 4-byte device copies per upload on the decode thread,
+    # against one synchronise per step.
+    CONFIGS = {
+        "TABLES-PER-ENTRY": (BASE56, {}),
+        "TABLES-BATCHED":   (BASE56, {"LLAMA_MOE_BATCH_TABLES": "1"}),
+    }
+    EXPECT = {"TABLES-PER-ENTRY": "table writes per entry",
+              "TABLES-BATCHED": "table writes BATCHED"}
+elif os.environ.get("WITH_PRIOR"):
+    MODE = "prior"
+    # CHANGES MODEL OUTPUT. Throughput here means nothing without the quality
+    # number from q1_cache_prior_quality.py at the same delta.
+    CONFIGS = {"PRIOR-0": (BASE56, {})}
+    EXPECT = {"PRIOR-0": "admission gate off"}
+    for _d in os.environ.get("PRIOR_DELTAS", "0.005,0.01,0.02").split(","):
+        CONFIGS[f"PRIOR-{_d}"] = (BASE56, {"LLAMA_MOE_CACHE_PRIOR": _d})
+        EXPECT[f"PRIOR-{_d}"] = "CACHE-PRIOR ROUTING"
+elif os.environ.get("WITH_STACK"):
+    MODE = "stack"
+    # Everything exact (no output change) that has measured or is expected to
+    # help, stacked, against the plain cache. Run only after the single-switch
+    # modes: a stack that wins says nothing about which part won.
+    # the byte-priced profile: at or under the VRAM of uniform 56
+    _prof = (
+        "0:88,1:88,3:72,5:64,6:48,7:40,10:72,11:64,12:64,13:64,14:48,15:48,18:40,"
+        "19:40,20:40,23:64,24:64,25:64,27:48,30:40,31:40,32:40,34:64,35:64,36:64,"
+        "37:64,40:48,43:40,44:48,45:48,46:48")
+    CONFIGS = {
+        "PLAIN-56": (BASE56, {}),
+        "STACK":    (BASE56, {"LLAMA_MOE_SLOT_PROFILE": _prof, "LLAMA_MOE_ADMIT": "heat",
+                              "LLAMA_MOE_BATCH_TABLES": "1"}),
+    }
+    EXPECT = {"PLAIN-56": "admission gate off", "STACK": "admission gate HEAT"}
+EXPECT = globals().get("EXPECT", {})
 
 ENV = dict(os.environ)
 ENV["CUDA_HOME"] = os.path.expanduser("~/miniconda3/envs/cudabuild")
@@ -176,12 +249,77 @@ def wait_free(timeout=90):
     return False
 
 
+def gpu_state():
+    """(used MiB, utilisation %, [(pid, MiB) of compute processes])."""
+    q = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,utilization.gpu",
+                        "--format=csv,noheader,nounits"], capture_output=True, text=True).stdout
+    used, util = [int(x) for x in q.strip().splitlines()[0].split(",")]
+    apps = []
+    out = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,used_memory",
+                          "--format=csv,noheader,nounits"], capture_output=True, text=True).stdout
+    for line in out.strip().splitlines():
+        try:
+            pid, mem = [int(x.strip()) for x in line.split(",")]
+            apps.append((pid, mem))
+        except ValueError:
+            pass
+    return used, util, apps
+
+
+# Someone else's model on this GPU makes every number here meaningless and can
+# take both processes down: on 2026-09-19 a launch into 11.7 of 12.2 GiB died in
+# cublasCreate with "the resource allocation failed". Refuse instead.
+MAX_FOREIGN_MIB = int(os.environ.get("MAX_FOREIGN_MIB", "1500"))
+
+
+def gpu_guard(label):
+    deadline = time.time() + 60
+    while True:
+        used, util, apps = gpu_state()
+        foreign = [(pid, mem) for pid, mem in apps if mem > 512]
+        if used <= MAX_FOREIGN_MIB and not foreign:
+            return
+        if time.time() > deadline:
+            raise RuntimeError(
+                f"{label}: GPU is in use ({used} MiB, {util}% busy, compute processes "
+                f"{foreign}) -- not launching a benchmark on top of other work. "
+                "Free the GPU, or raise MAX_FOREIGN_MIB if this is desktop memory.")
+        time.sleep(2)
+
+
+def cache_stats(label):
+    """The engine's own counters from the server log, so an arm reports what its
+    cache DID and not only how fast it ran."""
+    out = {}
+    try:
+        with open(f"/tmp/r3-{label}.log", errors="replace") as f:
+            for line in f:
+                if "moe-cache: steps=" in line:
+                    for tok in line.split():
+                        if tok.startswith("hit="):
+                            out["hit_pct"] = float(tok[4:].rstrip("%"))
+                if "moe-cache: per token:" in line:
+                    w = line.replace(",", " ").replace(";", " ").split()
+                    try:
+                        out["missed_per_token"] = float(w[w.index("missed") - 1])
+                        out["uploads_per_token"] = float(w[w.index("uploaded") - 1])
+                        out["admit_ok"] = int(w[w.index("ok") - 1])
+                        out["admit_denied"] = int(w[w.index("denied") - 1])
+                    except (ValueError, IndexError):
+                        pass
+    except OSError:
+        pass
+    return out
+
+
 def launch(label, args, extra_env=None):
     if not wait_free():
         raise RuntimeError(f"{label}: port {PORT} still held -- refusing to measure "
                            "someone else's server")
+    gpu_guard(label)
     log = open(f"/tmp/r3-{label}.log", "w")
     env = dict(ENV)
+    env["LLAMA_MOE_STATS"] = "1"
     env.update(extra_env or {})
     p = subprocess.Popen([BIN, "-m", MODEL] + COMMON + args,
                          stdout=log, stderr=subprocess.STDOUT, env=env)
@@ -209,6 +347,17 @@ def launch(label, args, extra_env=None):
     if vram is None:
         p.kill(); p.wait()
         raise RuntimeError(f"{label}: pid {p.pid} holds no VRAM -- not measuring")
+    # An arm whose switch silently did not take effect measures the baseline
+    # twice and reports "no difference". The engine prints one banner per
+    # switch; require the one this arm is supposed to produce.
+    want = EXPECT.get(label)
+    if want:
+        with open(f"/tmp/r3-{label}.log", errors="replace") as f:
+            if want not in f.read():
+                p.kill(); p.wait()
+                raise RuntimeError(f"{label}: expected '{want}' in the server log and it "
+                                   "is not there -- the switch did not take effect "
+                                   "(stale binary?). Not measuring.")
     return p, vram
 
 
@@ -219,6 +368,14 @@ def stop(p):
     except subprocess.TimeoutExpired:
         p.kill(); p.wait()
     wait_free()
+    # The port frees before the VRAM does. Launching the next arm into memory
+    # the driver has not reclaimed yet is how an arm dies in cublasCreate.
+    t0 = time.time()
+    while time.time() - t0 < 60:
+        if all(pid != p.pid for pid, _ in gpu_state()[2]):
+            break
+        time.sleep(1)
+    time.sleep(2)
 
 
 def complete(prompt, n_predict=N_PREDICT):
@@ -304,6 +461,7 @@ def main():
                       f"{results[label]['control_mid'][-1]:.1f}/"
                       f"{results[label]['control_last'][-1]:.1f} (first/mid/last)  "
                       f"real {statistics.fmean(results[label]['real_decode'][-len(order):]):.1f} tok/s")
+                results[label].setdefault("cache", []).append(cache_stats(label))
             finally:
                 stop(p)
 
@@ -323,6 +481,7 @@ def main():
             "control_first_tps": summarise(R["control_first"]),
             "control_mid_tps": summarise(R["control_mid"]),
             "control_last_tps": summarise(R["control_last"]),
+            "cache_per_round": R.get("cache", []),
             "per_prompt": R["per_prompt"],
         }
     os.makedirs(ART, exist_ok=True)
@@ -344,6 +503,46 @@ def main():
               f"{c['control_mid_tps']['mean']:>10.1f}"
               f"{c['control_last_tps']['mean']:>11.1f}")
     print("\nIf ctrl last >> ctrl first the gap is cache warming, not the prompts.")
+
+    # Paired, per prompt. The +/- above is dominated by how different the
+    # prompts are from each other, which is the same in every arm and says
+    # nothing about the difference BETWEEN arms. Pairing each prompt with
+    # itself removes it: Phase 2's +3.7 reads as 2 standard errors unpaired
+    # and 4.7 paired, from the same 69 measurements.
+    labels = list(CONFIGS)
+    if len(labels) > 1:
+        def by_id(label):
+            m = {}
+            for q in out["configs"][label]["per_prompt"]:
+                if q["decode_tps"]:
+                    m.setdefault(q["id"], []).append(q["decode_tps"])
+            return {k: statistics.fmean(v) for k, v in m.items()}
+        base = by_id(labels[0])
+        print(f"\n=== paired per prompt, vs {labels[0]} ===")
+        out["paired"] = {}
+        for label in labels[1:]:
+            other = by_id(label)
+            d = [other[k] - base[k] for k in base if k in other]
+            if len(d) < 2:
+                continue
+            mean, sd = statistics.fmean(d), statistics.stdev(d)
+            sem = sd / len(d) ** 0.5
+            pos = sum(1 for x in d if x > 0)
+            out["paired"][label] = {"n": len(d), "mean": round(mean, 3), "sd": round(sd, 3),
+                                    "sem": round(sem, 3), "t": round(mean / sem, 2) if sem else None,
+                                    "positive": pos}
+            print(f"{label:22} {mean:+6.2f} tok/s  sem {sem:4.2f}  t {mean/sem if sem else 0:+5.2f}"
+                  f"  better on {pos}/{len(d)} prompts")
+        for label in labels:
+            c = [x for x in out["configs"][label]["cache_per_round"] if x]
+            if c:
+                last = c[-1]
+                print(f"{label:22} cache: hit {last.get('hit_pct')}%  "
+                      f"missed/token {last.get('missed_per_token')}  "
+                      f"uploads/token {last.get('uploads_per_token')}  "
+                      f"denied {last.get('admit_denied')}")
+        with open(os.path.join(ART, fname), "w") as f:
+            json.dump(out, f, indent=1)
 
 
 if __name__ == "__main__":
