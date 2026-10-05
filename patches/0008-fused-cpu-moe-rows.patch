@@ -1,0 +1,671 @@
+diff --git a/ggml/include/ggml-cpu.h b/ggml/include/ggml-cpu.h
+index dc6453c..220ee26 100644
+--- a/ggml/include/ggml-cpu.h
++++ b/ggml/include/ggml-cpu.h
+@@ -7,6 +7,10 @@
+ extern "C" {
+ #endif
+ 
++    struct ggml_compute_params;
++    // Called by every member of the compute team with shared work_data.
++    GGML_BACKEND_API void ggml_cpu_moe_rows(const struct ggml_compute_params * params, struct ggml_tensor * dst);
++
+     // the compute plan that needs to be prepared for ggml_graph_compute()
+     // since https://github.com/ggml-org/ggml/issues/287
+     struct ggml_cplan {
+diff --git a/ggml/include/ggml-rpc.h b/ggml/include/ggml-rpc.h
+index cbfe400..c4a35c1 100644
+--- a/ggml/include/ggml-rpc.h
++++ b/ggml/include/ggml-rpc.h
+@@ -8,10 +8,10 @@ extern "C" {
+ 
+ #define RPC_PROTO_MAJOR_VERSION    6
+ #define RPC_PROTO_MINOR_VERSION    0
+-#define RPC_PROTO_PATCH_VERSION    0
++#define RPC_PROTO_PATCH_VERSION    1
+ 
+ #ifdef  __cplusplus
+-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
++static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
+ #endif
+ 
+ #define GGML_RPC_MAX_SERVERS       16
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+index 9684709..a35ba90 100644
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -599,6 +599,8 @@ extern "C" {
+ 
+         GGML_OP_GLU,
+ 
++        GGML_OP_MOE_ROWS,
++
+         GGML_OP_COUNT,
+     };
+ 
+@@ -1457,6 +1459,13 @@ extern "C" {
+             struct ggml_tensor  * b,
+             struct ggml_tensor  * ids);
+ 
++    // CPU-only routed SwiGLU experts. Cached rows are zeroed when table is set.
++    GGML_API struct ggml_tensor * ggml_moe_rows(
++        struct ggml_context * ctx,
++        struct ggml_tensor * up, struct ggml_tensor * input, struct ggml_tensor * ids,
++        struct ggml_tensor * table, struct ggml_tensor * gate, struct ggml_tensor * down,
++        int32_t dummy);
++
+     // A: m columns, n rows,
+     // B: p columns, n rows,
+     // result is m columns, p rows
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
+index 50ca3c8..f5e261c 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -1531,6 +1531,45 @@ static void * incr_ptr_aligned(void ** p, size_t size, size_t align) {
+     return ptr;
+ }
+ 
++static void ggml_cpu_moe_observe(const struct ggml_tensor * src0, const struct ggml_tensor * ids) {
++    const int n_ids = ids->ne[0];
++    // MoE routing observation for the llama expert cache
++    {
++        void * moe_obs_ud = NULL;
++        ggml_moe_obs_cb_t moe_obs_cb = ggml_get_moe_obs_callback(&moe_obs_ud);
++        if (moe_obs_cb && strstr(src0->name, "ffn_gate_exps")) {
++            moe_obs_cb(src0->name, ids, moe_obs_ud);
++        }
++    }
++
++    // GGML_MOE_LOG: append the routed expert ids of every ffn_gate_exps
++    // mul_mat_id to the file named by the env var. Diagnostic only; the
++    // whole block is inert unless GGML_MOE_LOG is set at first use.
++    {
++        static FILE * moe_log_file  = NULL;
++        static int    moe_log_state = -1;
++        if (moe_log_state == -1) {
++            const char * moe_log_path = getenv("GGML_MOE_LOG");
++            if (moe_log_path && moe_log_path[0]) {
++                moe_log_file = fopen(moe_log_path, "a");
++            }
++            moe_log_state = moe_log_file ? 1 : 0;
++        }
++        if (moe_log_state == 1 && strstr(src0->name, "ffn_gate_exps")) {
++            flockfile(moe_log_file);
++            for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
++                fprintf(moe_log_file, "%s", src0->name);
++                for (int id = 0; id < n_ids; ++id) {
++                    const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
++                    fprintf(moe_log_file, " %d", i02);
++                }
++                fputc('\n', moe_log_file);
++            }
++            funlockfile(moe_log_file);
++        }
++    }
++}
++
+ static void ggml_compute_forward_mul_mat_id(
+         const struct ggml_compute_params * params,
+               struct ggml_tensor * dst) {
+@@ -1651,41 +1690,7 @@ static void ggml_compute_forward_mul_mat_id(
+             }
+         }
+ 
+-        // MoE routing observation for the llama expert cache
+-        {
+-            void * moe_obs_ud = NULL;
+-            ggml_moe_obs_cb_t moe_obs_cb = ggml_get_moe_obs_callback(&moe_obs_ud);
+-            if (moe_obs_cb && strstr(src0->name, "ffn_gate_exps")) {
+-                moe_obs_cb(src0->name, ids, moe_obs_ud);
+-            }
+-        }
+-
+-        // GGML_MOE_LOG: append the routed expert ids of every ffn_gate_exps
+-        // mul_mat_id to the file named by the env var. Diagnostic only; the
+-        // whole block is inert unless GGML_MOE_LOG is set at first use.
+-        {
+-            static FILE * moe_log_file  = NULL;
+-            static int    moe_log_state = -1;
+-            if (moe_log_state == -1) {
+-                const char * moe_log_path = getenv("GGML_MOE_LOG");
+-                if (moe_log_path && moe_log_path[0]) {
+-                    moe_log_file = fopen(moe_log_path, "a");
+-                }
+-                moe_log_state = moe_log_file ? 1 : 0;
+-            }
+-            if (moe_log_state == 1 && strstr(src0->name, "ffn_gate_exps")) {
+-                flockfile(moe_log_file);
+-                for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+-                    fprintf(moe_log_file, "%s", src0->name);
+-                    for (int id = 0; id < n_ids; ++id) {
+-                        const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+-                        fprintf(moe_log_file, " %d", i02);
+-                    }
+-                    fputc('\n', moe_log_file);
+-                }
+-                funlockfile(moe_log_file);
+-            }
+-        }
++        ggml_cpu_moe_observe(src0, ids);
+     }
+ 
+     // reset current_chunk
+@@ -1758,6 +1763,102 @@ static void ggml_compute_forward_mul_mat_id(
+     }
+ }
+ 
++static size_t ggml_moe_mmid_work_size(const struct ggml_tensor * weights,
++                                    enum ggml_type input_type, int64_t input_elements,
++                                    const struct ggml_tensor * ids) {
++    const enum ggml_type dot_type = type_traits_cpu[weights->type].vec_dot_type;
++    size_t size = input_type != dot_type ? ggml_row_size(dot_type, input_elements) + sizeof(int64_t) : 0;
++    const size_t n = weights->ne[2];
++    size += n * sizeof(int64_t) + sizeof(int64_t);
++    size += n * ids->ne[0] * ids->ne[1] * sizeof(struct mmid_row_mapping) + sizeof(int64_t);
++    size += CACHE_LINE_SIZE * n + CACHE_LINE_SIZE;
++    return size;
++}
++
++static size_t ggml_moe_rows_intermediate_size(const struct ggml_tensor * dst) {
++    const size_t bytes = sizeof(float) * dst->src[0]->ne[1] * dst->ne[1] * dst->ne[2];
++    return GGML_PAD(bytes, CACHE_LINE_SIZE);
++}
++
++static struct ggml_tensor ggml_moe_rows_intermediate(const struct ggml_tensor * dst, void * data) {
++    struct ggml_tensor result = *dst;
++    result.ne[0] = dst->src[0]->ne[1];
++    result.nb[0] = sizeof(float);
++    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
++        result.nb[i] = result.nb[i-1] * result.ne[i-1];
++    }
++    result.data = data;
++    memset(result.src, 0, sizeof(result.src));
++    return result;
++}
++
++void ggml_cpu_moe_rows(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
++    const size_t bytes = ggml_moe_rows_intermediate_size(dst);
++    GGML_ASSERT(params->wsize >= 3 * bytes + CACHE_LINE_SIZE);
++    // The common all-hit layer needs only observation and zero output rows.
++    if (dst->src[3]) {
++        int32_t * has_miss = (int32_t *) ((char *) params->wdata + 3 * bytes);
++        if (params->ith == 0) {
++            const struct ggml_tensor * ids = dst->src[2];
++            const int32_t * table = (const int32_t *) dst->src[3]->data;
++            const int32_t dummy = ggml_get_op_params_i32(dst, 0);
++            *has_miss = 0;
++            for (int64_t t = 0; t < ids->ne[1]; ++t) {
++                for (int64_t e = 0; e < ids->ne[0]; ++e) {
++                    const int32_t id = *(const int32_t *) ((const char *) ids->data + t * ids->nb[1] + e * ids->nb[0]);
++                    GGML_ASSERT(id >= 0 && id < dst->src[0]->ne[2]);
++                    if (table[id] == dummy) {
++                        *has_miss = 1;
++                    }
++                }
++            }
++        }
++        ggml_barrier(params->threadpool);
++        const bool miss = *has_miss != 0;
++        if (!miss) {
++            if (params->ith == 0) {
++                ggml_cpu_moe_observe(dst->src[4], dst->src[2]);
++            }
++            const int64_t rows = ggml_nrows(dst);
++            const int64_t first = rows * params->ith / params->nth;
++            const int64_t last = rows * (params->ith + 1) / params->nth;
++            memset((char *) dst->data + first * dst->nb[1], 0, (last - first) * dst->nb[1]);
++            return;
++        }
++    }
++    struct ggml_compute_params sub = *params;
++    sub.wdata = (char *) params->wdata + 3 * bytes + CACHE_LINE_SIZE;
++    sub.wsize -= 3 * bytes + CACHE_LINE_SIZE;
++    struct ggml_tensor up   = ggml_moe_rows_intermediate(dst, params->wdata);
++    struct ggml_tensor gate = ggml_moe_rows_intermediate(dst, (char *) params->wdata + bytes);
++    struct ggml_tensor act  = ggml_moe_rows_intermediate(dst, (char *) params->wdata + 2 * bytes);
++    up.op = gate.op = GGML_OP_MUL_MAT_ID;
++    up.src[0] = dst->src[0];
++    gate.src[0] = dst->src[4];
++    up.src[1] = gate.src[1] = dst->src[1];
++    up.src[2] = gate.src[2] = dst->src[2];
++    up.src[3] = gate.src[3] = dst->src[3];
++    ggml_compute_forward_mul_mat_id(&sub, &up);
++    ggml_barrier(params->threadpool);
++    ggml_compute_forward_mul_mat_id(&sub, &gate);
++    ggml_barrier(params->threadpool);
++    act.op = GGML_OP_GLU;
++    act.src[0] = &gate;
++    act.src[1] = &up;
++    memset(act.op_params, 0, sizeof(act.op_params));
++    ggml_set_op_params_i32(&act, 0, GGML_GLU_OP_SWIGLU);
++    ggml_compute_forward_glu(&sub, &act);
++    ggml_barrier(params->threadpool);
++    struct ggml_tensor down = *dst;
++    down.op = GGML_OP_MUL_MAT_ID;
++    memset(down.src, 0, sizeof(down.src));
++    down.src[0] = dst->src[5];
++    down.src[1] = &act;
++    down.src[2] = dst->src[2];
++    down.src[3] = dst->src[3];
++    ggml_compute_forward_mul_mat_id(&sub, &down);
++}
++
+ /////////////////////////////////
+ 
+ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor) {
+@@ -1889,6 +1990,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+             {
+                 ggml_compute_forward_mul_mat(params, tensor);
+             } break;
++        case GGML_OP_MOE_ROWS:
++            {
++                ggml_cpu_moe_rows(params, tensor);
++            } break;
+         case GGML_OP_MUL_MAT_ID:
+             {
+                 ggml_compute_forward_mul_mat_id(params, tensor);
+@@ -2381,6 +2486,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
+         case GGML_OP_CONCAT:
+         case GGML_OP_MUL_MAT:
+         case GGML_OP_MUL_MAT_ID:
++        case GGML_OP_MOE_ROWS:
+         case GGML_OP_OUT_PROD:
+             {
+                 n_tasks = n_threads;
+@@ -2910,6 +3016,17 @@ struct ggml_cplan ggml_graph_plan(
+                             cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
+                         }
+                     } break;
++                case GGML_OP_MOE_ROWS:
++                    {
++                        const struct ggml_tensor * ids = node->src[2];
++                        const int64_t n = node->src[0]->ne[1] * node->ne[1] * node->ne[2];
++                        size_t scratch = ggml_moe_mmid_work_size(node->src[0], node->src[1]->type,
++                                                               ggml_nelements(node->src[1]), ids);
++                        scratch = MAX(scratch, ggml_moe_mmid_work_size(node->src[4], node->src[1]->type,
++                                                                     ggml_nelements(node->src[1]), ids));
++                        scratch = MAX(scratch, ggml_moe_mmid_work_size(node->src[5], GGML_TYPE_F32, n, ids));
++                        cur = 3 * ggml_moe_rows_intermediate_size(node) + CACHE_LINE_SIZE + scratch;
++                    } break;
+                 case GGML_OP_MUL_MAT_ID:
+                     {
+                         cur = 0;
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index 256d152..20c8ef9 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -1113,9 +1113,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
+     "OPT_STEP_SGD",
+ 
+     "GLU",
++    "MOE_ROWS",
+ };
+ 
+-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
++static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+ 
+ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
+     "none",
+@@ -1228,9 +1229,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
+     "sgd(x)",
+ 
+     "glu(x)",
++    "moe_rows(x)",
+ };
+ 
+-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
++static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+ 
+ static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
+ 
+@@ -3367,6 +3369,36 @@ struct ggml_tensor * ggml_mul_mat_id(
+     return result;
+ }
+ 
++struct ggml_tensor * ggml_moe_rows(
++        struct ggml_context * ctx,
++        struct ggml_tensor * up, struct ggml_tensor * input, struct ggml_tensor * ids,
++        struct ggml_tensor * table, struct ggml_tensor * gate, struct ggml_tensor * down,
++        int32_t dummy) {
++    GGML_ASSERT(input->type == GGML_TYPE_F32 && ggml_is_contiguous(input));
++    GGML_ASSERT(ids->type == GGML_TYPE_I32 && ids->ne[2] == 1 && ids->ne[3] == 1);
++    GGML_ASSERT(ggml_are_same_shape(up, gate));
++    GGML_ASSERT(up->ne[0] == input->ne[0] && input->ne[1] == 1 && input->ne[3] == 1);
++    GGML_ASSERT(input->ne[2] == ids->ne[1]);
++    GGML_ASSERT(down->ne[0] == up->ne[1] && down->ne[1] == up->ne[0]);
++    GGML_ASSERT(down->ne[2] == up->ne[2] && down->ne[3] == 1 && up->ne[3] == 1);
++    GGML_ASSERT(ggml_is_contiguous(up) && ggml_is_contiguous(gate) && ggml_is_contiguous(down));
++    if (table) {
++        GGML_ASSERT(table->type == GGML_TYPE_I32 && ggml_is_contiguous(table));
++        GGML_ASSERT(ggml_nelements(table) == up->ne[2]);
++    }
++    const int64_t ne[4] = { down->ne[1], ids->ne[0], ids->ne[1], 1 };
++    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
++    result->op = GGML_OP_MOE_ROWS;
++    result->src[0] = up;
++    result->src[1] = input;
++    result->src[2] = ids;
++    result->src[3] = table;
++    result->src[4] = gate;
++    result->src[5] = down;
++    ggml_set_op_params_i32(result, 0, dummy);
++    return result;
++}
++
+ // ggml_out_prod
+ 
+ static inline bool ggml_can_out_prod(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 21d7eda..4beab96 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2035,6 +2035,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
+     //synchronize();
+ 
+     // apply throttled MoE expert-cache updates between graph executions
++    if (llama_moe_cache_requires_sync()) {
++        synchronize();
++    }
+     llama_moe_cache_step();
+ 
+     return 0;
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index d720996..4c364e7 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -2308,6 +2308,14 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         experts->src[3] = mcache->host_table;
+         experts->op_params[0] = mcache->n_slots;
+ 
++        const char * fused_env = getenv("LLAMA_MOE_FUSED_CPU");
++        const float fused_limit = il >= 0 ? hparams.swiglu_clamp_exp[il] : 0.0f;
++        if (fused_env && atoi(fused_env) != 0 && fused_limit <= 1e-6f) {
++            experts = ggml_moe_rows(ctx0, up_exps, mc_inp, selected_experts,
++                                    mcache->host_table, gate_exps, down_exps, mcache->n_slots);
++            cb(experts, "ffn_moe_cpu_fused", il);
++        }
++
+         // device-side chain over the cached experts, mirroring the LLM_FFN_SILU
+         // activation above (the only type_op the cache path is enabled for)
+         ggml_tensor * up_g   = ggml_mul_mat_id(ctx0, mcache->up_c,   mc_inp, mc_slot_ids);
+diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
+index 2365411..e1d54db 100644
+--- a/src/llama-moecache.cpp
++++ b/src/llama-moecache.cpp
+@@ -101,6 +101,13 @@ struct upload_job {
+ struct moe_cache {
+     int32_t n_slots     = 0;
+     int32_t max_inserts = 2;
++    bool freeze_cache = false;
++    bool deterministic = false;
++    FILE * map_record = nullptr;
++    FILE * map_replay = nullptr;
++    FILE * route_trace = nullptr;
++    std::condition_variable copied_cv;
++    uint64_t publication_wait_ns = 0;
+ 
+     uint64_t clock       = 0;
+     uint64_t n_steps     = 0;
+@@ -216,6 +223,84 @@ moe_cache * g_cache = nullptr;
+ std::mutex g_init_mtx;
+ bool g_init_done = false;
+ 
++void upload_slice(ggml_tensor * dst, const ggml_tensor * src, int32_t expert, int32_t slot);
++void set_table_entry(moe_cache * mc, layer_state & ls, int32_t expert, int32_t slot);
++void flush_tables(moe_cache * mc);
++
++void map_header(moe_cache * mc, FILE * file, bool read) {
++    if (read) {
++        int version = 0, layers = 0;
++        GGML_ASSERT(fscanf(file, "moe-map %d %d\n", &version, &layers) == 2);
++        GGML_ASSERT(version == 1 && layers == (int) mc->layers.size());
++        for (const auto & ls : mc->layers) {
++            int il = -1, slots = 0, experts = 0;
++            GGML_ASSERT(fscanf(file, "layer %d %d %d\n", &il, &slots, &experts) == 3);
++            GGML_ASSERT(il == ls.pub.il && slots == ls.pub.n_slots && experts == (int) ls.expert_slot.size());
++        }
++    } else {
++        fprintf(file, "moe-map 1 %zu\n", mc->layers.size());
++        for (const auto & ls : mc->layers) {
++            fprintf(file, "layer %d %d %zu\n", ls.pub.il, ls.pub.n_slots, ls.expert_slot.size());
++        }
++    }
++}
++
++void map_frame(moe_cache * mc) {
++    if (mc->map_replay) {
++        uint64_t step = UINT64_MAX;
++        GGML_ASSERT(fscanf(mc->map_replay, "step %" SCNu64 "\n", &step) == 1 && step == mc->n_steps);
++        for (auto & ls : mc->layers) {
++            int il = -1;
++            GGML_ASSERT(fscanf(mc->map_replay, "map %d", &il) == 1 && il == ls.pub.il);
++            std::vector<int32_t> desired(ls.pub.n_slots);
++            std::vector<bool> seen(ls.expert_slot.size(), false);
++            for (auto & expert : desired) {
++                GGML_ASSERT(fscanf(mc->map_replay, "%" SCNd32, &expert) == 1);
++                GGML_ASSERT(expert >= -1 && expert < (int32_t) ls.expert_slot.size());
++                if (expert >= 0) {
++                    GGML_ASSERT(!seen[expert]);
++                    seen[expert] = true;
++                }
++            }
++            for (int32_t slot = 0; slot < ls.pub.n_slots; ++slot) {
++                const int32_t expert = desired[slot];
++                if (expert >= 0 && ls.slot_expert[slot] != expert) {
++                    upload_slice(ls.pub.up_c, ls.pub.up_src, expert, slot);
++                    upload_slice(ls.pub.gate_c, ls.pub.gate_src, expert, slot);
++                    upload_slice(ls.pub.down_c, ls.pub.down_src, expert, slot);
++                }
++            }
++            std::fill(ls.expert_slot.begin(), ls.expert_slot.end(), -1);
++            for (int32_t expert = 0; expert < (int32_t) ls.expert_slot.size(); ++expert) {
++                set_table_entry(mc, ls, expert, ls.pub.n_slots);
++            }
++            for (int32_t slot = 0; slot < ls.pub.n_slots; ++slot) {
++                const int32_t expert = desired[slot];
++                ls.slot_expert[slot] = expert;
++                ls.slot_in_flight[slot] = false;
++                if (expert >= 0) {
++                    ls.expert_slot[expert] = slot;
++                    set_table_entry(mc, ls, expert, slot);
++                }
++            }
++        }
++        flush_tables(mc);
++    }
++    if (mc->map_record) {
++        fprintf(mc->map_record, "step %" PRIu64 "\n", mc->n_steps);
++        for (const auto & ls : mc->layers) {
++            std::vector<int32_t> published(ls.pub.n_slots, -1);
++            for (int32_t expert = 0; expert < (int32_t) ls.expert_slot.size(); ++expert) {
++                if (ls.expert_slot[expert] >= 0) published[ls.expert_slot[expert]] = expert;
++            }
++            fprintf(mc->map_record, "map %d", ls.pub.il);
++            for (int32_t expert : published) fprintf(mc->map_record, " %d", expert);
++            fputc('\n', mc->map_record);
++        }
++        GGML_ASSERT(fflush(mc->map_record) == 0 && !ferror(mc->map_record));
++    }
++}
++
+ int32_t lru_resident(const layer_state & ls);
+ bool    admit_ok(moe_cache * mc, const layer_state & ls, int32_t id, int32_t victim);
+ 
+@@ -239,6 +324,9 @@ int parse_layer_from_name(const char * name) {
+ // predictor does not help".
+ int issue_uploads(moe_cache * mc, size_t li, const int32_t * ids, size_t n, int budget,
+                   int min_keep = 0, bool spec = false) {
++    if (mc->freeze_cache) {
++        return 0;
++    }
+     layer_state & ls = mc->layers[li];
+     int issued = 0;
+     for (size_t i = 0; i < n && issued < budget; ++i) {
+@@ -307,6 +395,18 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+ 
+     std::lock_guard<std::mutex> lock(mc->mtx);
+ 
++    if (mc->route_trace) {
++        fprintf(mc->route_trace, "route %" PRIu64 " %d %" PRId64 " %" PRId64, mc->n_steps, il, n_ids, n_tokens);
++        for (int64_t t = 0; t < n_tokens; ++t) {
++            for (int64_t i = 0; i < n_ids; ++i) {
++                const int32_t id = *(const int32_t *) ((const char *) ids->data + t * ids->nb[1] + i * ids->nb[0]);
++                GGML_ASSERT(id >= 0 && id < (int32_t) ls->expert_slot.size());
++                fprintf(mc->route_trace, " %d:%d", id, ls->expert_slot[id]);
++            }
++        }
++        fputc('\n', mc->route_trace);
++    }
++
+     // `prev` for the predictor must be read BEFORE this layer's ids are stored,
+     // and from the NEXT layer, which has not run yet this token.
+     const size_t li = (size_t) (ls - mc->layers.data());
+@@ -395,7 +495,7 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+         // not -- that is the locality the cache exists for. Issuing now gives
+         // the copy the rest of this token to complete, instead of the zero
+         // slack it gets when the job is only created at the step boundary.
+-        const int32_t pool_target = mc->max_inserts + (mc->have_pred ? mc->predict_top : 0);
++        const int32_t pool_target = mc->freeze_cache ? 0 : mc->max_inserts + (mc->have_pred ? mc->predict_top : 0);
+         // The slot an early upload takes was freed at an earlier step, so the
+         // expert it will end up displacing is whichever one the next top-up
+         // evicts: the current LRU resident. While the layer is still filling,
+@@ -725,6 +825,14 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+             mc->max_inserts = max_inserts;
+         }
+ 
++        if (const char * e = getenv("LLAMA_MOE_CACHE_FREEZE")) {
++            mc->freeze_cache = atoi(e) != 0;
++            if (mc->freeze_cache) {
++                mc->max_inserts = 0;
++                fprintf(stderr, "moe-cache: cache mapping FROZEN (diagnostic only)\n");
++            }
++        }
++
+         // Issue uploads from the observe callback rather than at the step
+         // boundary. Off by default so the shipped behaviour is unchanged and
+         // the two can be measured against each other.
+@@ -1030,6 +1138,30 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+                     n_rec ? "" : " (COLD START - file missing, empty or refused)");
+         }
+ 
++        if (const char * e = getenv("LLAMA_MOE_DETERMINISTIC")) {
++            mc->deterministic = atoi(e) != 0;
++        }
++        if (const char * path = getenv("LLAMA_MOE_MAP_RECORD")) {
++            mc->map_record = fopen(path, "w");
++            GGML_ASSERT(mc->map_record);
++            map_header(mc, mc->map_record, false);
++        }
++        if (const char * path = getenv("LLAMA_MOE_MAP_REPLAY")) {
++            GGML_ASSERT(!mc->map_record);
++            mc->map_replay = fopen(path, "r");
++            GGML_ASSERT(mc->map_replay);
++            mc->freeze_cache = true;
++            mc->max_inserts = 0;
++            map_header(mc, mc->map_replay, true);
++        }
++        if (const char * path = getenv("LLAMA_MOE_ROUTE_TRACE")) {
++            mc->route_trace = fopen(path, "w");
++            GGML_ASSERT(mc->route_trace);
++        }
++        map_frame(mc);
++        fprintf(stderr, "moe-cache: deterministic publication %s; map record=%d replay=%d\n",
++                mc->deterministic ? "ENABLED" : "DISABLED", mc->map_record != nullptr, mc->map_replay != nullptr);
++
+         // Measured: 1, 2, 3, 4 and 6 threads give 114.2, 113.0, 110.8, 111.7 and
+         // 109.4 tok/s. More threads do not help and trend slightly worse -- the
+         // copies already overlap with compute on their own thread, and the limit
+@@ -1096,6 +1228,7 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+                         mc->done.push_back(j);
+                         mc->n_copied++;
+                     }
++                    if (mc->deterministic) mc->copied_cv.notify_all();
+                 }
+             });
+         }
+@@ -1118,6 +1251,10 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+ 
+         // Loud either way: a batched upload path that silently is not used
+         // looks exactly like one that does not help.
++        const char * fused_env = getenv("LLAMA_MOE_FUSED_CPU");
++        fprintf(stderr, "moe-cache: fused CPU rows %s (unclamped SwiGLU only)\n",
++                fused_env && atoi(fused_env) != 0 ? "ENABLED" : "DISABLED");
++
+         fprintf(stderr, "moe-cache: batched uploads %s\n",
+                 mc->h2d_batch ? "ENABLED (one sync per expert)"
+                               : "unavailable, using one sync per slice");
+@@ -1173,12 +1310,34 @@ const llama_moe_cache_layer * llama_moe_cache_lookup(const ggml_tensor * up_exps
+     return &g_cache->layers[it->second].pub;
+ }
+ 
++// Replay overwrites physical slots; deterministic publication must include every
++// routing callback from the completed graph before waiting for its uploads.
++bool llama_moe_cache_requires_sync() {
++    return g_cache && (g_cache->deterministic || g_cache->map_replay);
++}
++
+ void llama_moe_cache_step() {
+     moe_cache * mc = g_cache;
+     if (!mc) {
+         return;
+     }
+ 
++    if (mc->deterministic) {
++        const auto start = std::chrono::steady_clock::now();
++        std::unique_lock<std::mutex> lk(mc->wmtx);
++        const uint64_t target = mc->n_scheduled;
++        const bool complete = mc->copied_cv.wait_for(lk, std::chrono::seconds(10), [mc, target]() {
++            return mc->n_copied >= target;
++        });
++        GGML_ASSERT(complete);
++        mc->publication_wait_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
++            std::chrono::steady_clock::now() - start).count();
++        std::sort(mc->done.begin(), mc->done.end(), [](const upload_job & a, const upload_job & b) {
++            if (a.layer_idx != b.layer_idx) return a.layer_idx < b.layer_idx;
++            return a.slot < b.slot;
++        });
++    }
++
+     // 1) publish completed uploads (sync point: no graph is executing)
+     {
+         std::lock_guard<std::mutex> wlk(mc->wmtx);
+@@ -1283,7 +1442,7 @@ void llama_moe_cache_step() {
+         // table write, and therefore has to happen exactly here and nowhere
+         // else.
+         ls.pending.clear();
+-        const int32_t pool_target = mc->max_inserts + (mc->have_pred ? mc->predict_top : 0);
++        const int32_t pool_target = mc->freeze_cache ? 0 : mc->max_inserts + (mc->have_pred ? mc->predict_top : 0);
+         std::vector<float> esc;
+         const bool use_model = evict_scores(mc, ls, esc);
+         static int evict_dbg = -1;
+@@ -1357,12 +1516,18 @@ void llama_moe_cache_step() {
+     // Every table edit of this step reaches the device here, in one transfer.
+     flush_tables(mc);
+ 
+-    if (!mc->heat_path.empty() && mc->n_steps % 512 == 0) {
++    if (!mc->freeze_cache && !mc->heat_path.empty() && mc->n_steps % 512 == 0) {
+         if (!save_heat(mc)) {
+             fprintf(stderr, "moe-cache: heat file write FAILED: %s\n", mc->heat_path.c_str());
+         }
+     }
+ 
++    map_frame(mc);
++    if (mc->route_trace) GGML_ASSERT(fflush(mc->route_trace) == 0);
++    if (mc->deterministic && mc->n_steps % 512 == 0) {
++        fprintf(stderr, "moe-cache: publication wait %.2f us/step\n",
++                mc->publication_wait_ns / 1000.0 / mc->n_steps);
++    }
+     mc->wcv.notify_all();
+ 
+     if (mc->n_steps % 512 == 0) {
+diff --git a/src/llama-moecache.h b/src/llama-moecache.h
+index 847a580..721cf42 100644
+--- a/src/llama-moecache.h
++++ b/src/llama-moecache.h
+@@ -68,3 +68,6 @@ const llama_moe_cache_layer * llama_moe_cache_lookup(const ggml_tensor * up_exps
+ 
+ // apply throttled LRU updates; call between graph executions only
+ void llama_moe_cache_step();
++
++// Diagnostic replay and deterministic publication require a completed graph.
++bool llama_moe_cache_requires_sync();

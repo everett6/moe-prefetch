@@ -1,0 +1,76 @@
+{
+  "binary": "/home/everett/moe-prefetch/engine/build/bin/llama-server",
+  "model": "/home/everett/.lmstudio/models/lmstudio-community/Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+  "runs": [
+    {
+      "fused": 0,
+      "vram": "9030 MiB",
+      "outputs": [
+        {
+          "id": "github_issues:00767",
+          "decode_tps": 62.51325265249386,
+          "n_pred": 200,
+          "wall_s": 4.488423052000144,
+          "output_sha256": "a66642b9d5e419201b5ff4e1e752b1fbfedfaec5156d47b9d75653a53f55230e"
+        },
+        {
+          "id": "no_robots:00385",
+          "decode_tps": 62.97882898621175,
+          "n_pred": 200,
+          "wall_s": 3.4330765180020535,
+          "output_sha256": "39f5a897515c6e59479f6532f764ce3f042896be1413fb29b388736f273b651e"
+        },
+        {
+          "id": "no_robots:00535",
+          "decode_tps": 63.232154472022636,
+          "n_pred": 200,
+          "wall_s": 3.4196645789998,
+          "output_sha256": "e71bd56a8d63fc8e9651bb29f3b54fa8d1c39a11829395d53c51d6acd1ea4b16"
+        },
+        {
+          "id": "se_decision:00435",
+          "decode_tps": 61.28422793421338,
+          "n_pred": 200,
+          "wall_s": 3.5859925280019525,
+          "output_sha256": "f6be6e7f4c29f8d58e5fd972345b58bb8b731adba92c560500bca0671970a425"
+        }
+      ]
+    },
+    {
+      "fused": 1,
+      "vram": "9030 MiB",
+      "outputs": [
+        {
+          "id": "github_issues:00767",
+          "decode_tps": 60.21245617198856,
+          "n_pred": 200,
+          "wall_s": 4.538109937002446,
+          "output_sha256": "a66642b9d5e419201b5ff4e1e752b1fbfedfaec5156d47b9d75653a53f55230e"
+        },
+        {
+          "id": "no_robots:00385",
+          "decode_tps": 59.70505701832945,
+          "n_pred": 200,
+          "wall_s": 3.5992615969989856,
+          "output_sha256": "39f5a897515c6e59479f6532f764ce3f042896be1413fb29b388736f273b651e"
+        },
+        {
+          "id": "no_robots:00535",
+          "decode_tps": 62.45976602383327,
+          "n_pred": 200,
+          "wall_s": 3.4548856820001674,
+          "output_sha256": "e71bd56a8d63fc8e9651bb29f3b54fa8d1c39a11829395d53c51d6acd1ea4b16"
+        },
+        {
+          "id": "se_decision:00435",
+          "decode_tps": 60.82475928372275,
+          "n_pred": 200,
+          "wall_s": 3.604422350999812,
+          "output_sha256": "f6be6e7f4c29f8d58e5fd972345b58bb8b731adba92c560500bca0671970a425"
+        }
+      ]
+    }
+  ],
+  "completed": true,
+  "output_mismatches": []
+}

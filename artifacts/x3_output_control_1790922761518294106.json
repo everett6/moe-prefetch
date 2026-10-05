@@ -1,0 +1,109 @@
+{
+  "binary": "/home/everett/moe-prefetch/engine/build/bin/llama-server",
+  "model": "/home/everett/.lmstudio/models/lmstudio-community/Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+  "runs": [
+    {
+      "repeat": 0,
+      "vram": "9032 MiB",
+      "outputs": [
+        {
+          "id": "github_issues:00767",
+          "decode_tps": 116.63919686586377,
+          "n_pred": 200,
+          "wall_s": 3.053520789999311,
+          "output_sha256": "a66642b9d5e419201b5ff4e1e752b1fbfedfaec5156d47b9d75653a53f55230e"
+        },
+        {
+          "id": "no_robots:00385",
+          "decode_tps": 122.15348616228121,
+          "n_pred": 200,
+          "wall_s": 1.8995587259996682,
+          "output_sha256": "0f2cf0295754901c8b8cbb6b020affa469b2660b0d25cdb5d2c4b2c9248ceab8"
+        },
+        {
+          "id": "no_robots:00535",
+          "decode_tps": 107.59676409490574,
+          "n_pred": 200,
+          "wall_s": 2.121809807998943,
+          "output_sha256": "c2e446ea756bad940d9495aad84a407d3eb74010b2203c9b8f4dfa124d8b23c0"
+        },
+        {
+          "id": "se_decision:00435",
+          "decode_tps": 130.97309720441544,
+          "n_pred": 200,
+          "wall_s": 1.8592539249984839,
+          "output_sha256": "50ffee996074e2c1bf3a7a01c11c3dac2cda498587d2f3a648bbf4749ea2aa4f"
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "vram": "9032 MiB",
+      "outputs": [
+        {
+          "id": "github_issues:00767",
+          "decode_tps": 117.46171721947455,
+          "n_pred": 200,
+          "wall_s": 2.9184606119997625,
+          "output_sha256": "a66642b9d5e419201b5ff4e1e752b1fbfedfaec5156d47b9d75653a53f55230e"
+        },
+        {
+          "id": "no_robots:00385",
+          "decode_tps": 119.586028025196,
+          "n_pred": 200,
+          "wall_s": 1.9368276090026484,
+          "output_sha256": "0f2cf0295754901c8b8cbb6b020affa469b2660b0d25cdb5d2c4b2c9248ceab8"
+        },
+        {
+          "id": "no_robots:00535",
+          "decode_tps": 104.16388590966216,
+          "n_pred": 200,
+          "wall_s": 2.1725071630025923,
+          "output_sha256": "c2e446ea756bad940d9495aad84a407d3eb74010b2203c9b8f4dfa124d8b23c0"
+        },
+        {
+          "id": "se_decision:00435",
+          "decode_tps": 128.94505450358423,
+          "n_pred": 200,
+          "wall_s": 1.8660529920016415,
+          "output_sha256": "50ffee996074e2c1bf3a7a01c11c3dac2cda498587d2f3a648bbf4749ea2aa4f"
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "vram": "9032 MiB",
+      "outputs": [
+        {
+          "id": "github_issues:00767",
+          "decode_tps": 124.72469686884604,
+          "n_pred": 200,
+          "wall_s": 2.819047465996846,
+          "output_sha256": "a66642b9d5e419201b5ff4e1e752b1fbfedfaec5156d47b9d75653a53f55230e"
+        },
+        {
+          "id": "no_robots:00385",
+          "decode_tps": 124.02014735338513,
+          "n_pred": 200,
+          "wall_s": 1.8663255700012087,
+          "output_sha256": "0f2cf0295754901c8b8cbb6b020affa469b2660b0d25cdb5d2c4b2c9248ceab8"
+        },
+        {
+          "id": "no_robots:00535",
+          "decode_tps": 106.63488696969908,
+          "n_pred": 200,
+          "wall_s": 2.126319795999734,
+          "output_sha256": "c2e446ea756bad940d9495aad84a407d3eb74010b2203c9b8f4dfa124d8b23c0"
+        },
+        {
+          "id": "se_decision:00435",
+          "decode_tps": 131.0219050189949,
+          "n_pred": 200,
+          "wall_s": 1.8407645490005962,
+          "output_sha256": "50ffee996074e2c1bf3a7a01c11c3dac2cda498587d2f3a648bbf4749ea2aa4f"
+        }
+      ]
+    }
+  ],
+  "baseline_unstable": {}
+}

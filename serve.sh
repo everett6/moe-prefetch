@@ -19,7 +19,7 @@
 #
 #   PORT (default 8080), CTX (default 4096), extra server flags after the mode.
 set -euo pipefail
-ENGINE=/home/everett/llama.cpp-build
+ENGINE=${ENGINE:-/home/everett/llama.cpp-build}
 export CUDA_HOME=${CUDA_HOME:-$HOME/miniconda3/envs/cudabuild}
 export LD_LIBRARY_PATH=$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}
 MODE=exact
