@@ -19,7 +19,6 @@
 #
 #   PORT (default 8080), CTX (default 4096), extra server flags after the mode.
 set -euo pipefail
-ENGINE=${ENGINE:-/home/everett/llama.cpp-build}
 export CUDA_HOME=${CUDA_HOME:-$HOME/miniconda3/envs/cudabuild}
 export LD_LIBRARY_PATH=$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}
 MODE=exact
@@ -44,6 +43,16 @@ case "${MODEL:-qwen3-30b}" in
         ;;
 esac
 export LLAMA_MOE_BATCH_TABLES=1
+# Built from patches 0008/0009 (experiments/build_fused.sh -> ./engine):
+#   FUSED=1    one fused CPU op per layer                   (+4.7 tok/s, same output)
+#   SIDECAR=1  missed experts computed on the CPU while the GPU runs the cached ones
+if [ "${FUSED:-0}" = 1 ] || [ "${SIDECAR:-0}" = 1 ]; then
+    export LLAMA_MOE_FUSED_CPU=1
+    ENGINE=${ENGINE:-$(dirname "$(readlink -f "$0")")/engine}
+fi
+if [ "${SIDECAR:-0}" = 1 ]; then
+    export LLAMA_MOE_SIDECAR=1
+fi
 
 if [ "$MODE" = fast ]; then
     if [ "$FAST_OK" != 1 ] && [ "${FORCE_FAST:-0}" != 1 ]; then
@@ -68,5 +77,6 @@ fi
 [ -f "$FILE" ] || { echo "model file not found: $FILE" >&2; exit 1; }
 
 echo "serve.sh: $MODE, $(basename "$FILE"), $SLOTS slots a layer, port ${PORT:-8080}" >&2
+ENGINE=${ENGINE:-/home/everett/llama.cpp-build}
 exec "$ENGINE/build/bin/llama-server" -m "$FILE" -ngl 999 -ncmoe "$NCMOE" --moe-expert-cache "$SLOTS" \
     --no-mmap -c "${CTX:-4096}" -fa on --host 127.0.0.1 --port "${PORT:-8080}" "$@"

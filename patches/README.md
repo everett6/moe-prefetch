@@ -18,6 +18,11 @@ to the one the experiments ran on (0006) plus the 2026-09-30 work (0007).
 | `0006` | early issue, predictor and evictor hooks, online learning, batched uploads, per-layer slot counts, and the upstream fixes of 0001/0003/0004 | measured; see docs/ |
 | `0007` | admission gate, batched table writes, heat-file warm start, cache-prior routing, probation for predicted uploads, scheduler split profiler | measured; see the graph-resident decode design and README |
 
+`0009` (on top of 0008) is the opt-in CPU sidecar, `LLAMA_MOE_SIDECAR=1`:
+the decode token stays on the GPU and missed experts are computed from host
+RAM by a serve thread while the GPU works. See
+[`docs/SIDECAR-IMPLEMENTATION.md`](../docs/SIDECAR-IMPLEMENTATION.md).
+
 `0008` is the opt-in fused CPU expert operation against `e67a8e3` (0006 and
 0007 applied), including cache-map recording/replay and an optional deterministic
 publication diagnostic. Build, correctness coverage, and the performance gate are in

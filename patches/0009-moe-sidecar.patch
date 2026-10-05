@@ -1,0 +1,997 @@
+diff --git a/ggml/include/ggml-moe-sidecar.h b/ggml/include/ggml-moe-sidecar.h
+new file mode 100644
+index 0000000..f4cdf9e
+--- /dev/null
++++ b/ggml/include/ggml-moe-sidecar.h
+@@ -0,0 +1,82 @@
++#pragma once
++
++// Channel between a decode graph running on the GPU and a CPU thread that
++// computes the experts the GPU cache does not hold (MoE "sidecar").
++//
++// One allocation of mapped pinned host memory holds the control block below
++// followed, per layer, by the layer input (n_embd floats) and the response
++// rows (GGML_MOE_SC_MAX_USED * n_embd floats). A small device allocation holds
++// the sequence counter, which must live in device memory because a captured
++// CUDA graph replays identical kernel arguments every token.
++//
++// Protocol, per layer and token:
++//   GPU  MOE_POST  writes ids (and x if any expert missed), the ring record,
++//                  then head = seq + 1
++//   CPU            reads the record; for a miss computes the rows, then
++//                  writes resp[layer] = seq + 1
++//   GPU  MOE_JOIN  if the layer missed, waits for resp[layer] == seq + 1 and
++//                  adds the missed rows to the cached chain's output
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define GGML_MOE_SC_MAX_LAYERS 128
++#define GGML_MOE_SC_RING       256
++#define GGML_MOE_SC_MAX_USED   16
++#define GGML_MOE_SC_ALIGN      256
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++struct ggml_moe_sc_record {
++    uint32_t seq;
++    uint32_t layer;
++    uint32_t miss;
++    uint32_t pad;
++};
++
++struct ggml_moe_sc_ctl {
++    uint32_t head;  // GPU writes: records posted so far
++    uint32_t err;   // GPU writes: nonzero after a timed-out wait
++    uint32_t pad[14];
++    struct ggml_moe_sc_record ring[GGML_MOE_SC_RING];
++    uint32_t resp[GGML_MOE_SC_MAX_LAYERS];                        // CPU writes
++    int32_t  ids[GGML_MOE_SC_MAX_LAYERS][GGML_MOE_SC_MAX_USED];  // GPU writes
++};
++
++struct ggml_moe_sc_dev {
++    uint32_t seq;
++    uint32_t posted_seq[GGML_MOE_SC_MAX_LAYERS];
++    uint32_t posted_miss[GGML_MOE_SC_MAX_LAYERS];
++};
++
++static inline size_t ggml_moe_sc_round(size_t n) {
++    return (n + GGML_MOE_SC_ALIGN - 1) / GGML_MOE_SC_ALIGN * GGML_MOE_SC_ALIGN;
++}
++
++static inline size_t ggml_moe_sc_layer_bytes(int n_embd) {
++    return ggml_moe_sc_round((size_t) n_embd * sizeof(float)) +
++           ggml_moe_sc_round((size_t) GGML_MOE_SC_MAX_USED * n_embd * sizeof(float));
++}
++
++static inline size_t ggml_moe_sc_host_bytes(int n_embd) {
++    return ggml_moe_sc_round(sizeof(struct ggml_moe_sc_ctl)) +
++           (size_t) GGML_MOE_SC_MAX_LAYERS * ggml_moe_sc_layer_bytes(n_embd);
++}
++
++// layer input, n_embd floats
++static inline float * ggml_moe_sc_x(void * base, int n_embd, int layer) {
++    return (float *) ((char *) base + ggml_moe_sc_round(sizeof(struct ggml_moe_sc_ctl)) +
++                      (size_t) layer * ggml_moe_sc_layer_bytes(n_embd));
++}
++
++// response rows, GGML_MOE_SC_MAX_USED * n_embd floats; row e is expert slot e of the layer's top-k
++static inline float * ggml_moe_sc_rows(void * base, int n_embd, int layer) {
++    return (float *) ((char *) ggml_moe_sc_x(base, n_embd, layer) +
++                      ggml_moe_sc_round((size_t) n_embd * sizeof(float)));
++}
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/ggml/include/ggml-rpc.h b/ggml/include/ggml-rpc.h
+index c4a35c1..38f3866 100644
+--- a/ggml/include/ggml-rpc.h
++++ b/ggml/include/ggml-rpc.h
+@@ -8,10 +8,10 @@ extern "C" {
+ 
+ #define RPC_PROTO_MAJOR_VERSION    6
+ #define RPC_PROTO_MINOR_VERSION    0
+-#define RPC_PROTO_PATCH_VERSION    1
++#define RPC_PROTO_PATCH_VERSION    2
+ 
+ #ifdef  __cplusplus
+-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
++static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
+ #endif
+ 
+ #define GGML_RPC_MAX_SERVERS       16
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+index a35ba90..9beabde 100644
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -600,6 +600,8 @@ extern "C" {
+         GGML_OP_GLU,
+ 
+         GGML_OP_MOE_ROWS,
++        GGML_OP_MOE_POST,
++        GGML_OP_MOE_JOIN,
+ 
+         GGML_OP_COUNT,
+     };
+@@ -1466,6 +1468,19 @@ extern "C" {
+         struct ggml_tensor * table, struct ggml_tensor * gate, struct ggml_tensor * down,
+         int32_t dummy);
+ 
++    // MoE sidecar (CUDA only, see ggml-moe-sidecar.h). POST returns a copy of x
++    // after publishing x and ids to host memory; JOIN returns cached plus the
++    // host's rows for the experts whose slot is `dummy`.
++    GGML_API struct ggml_tensor * ggml_moe_post(
++        struct ggml_context * ctx,
++        struct ggml_tensor * x, struct ggml_tensor * ids, struct ggml_tensor * slots,
++        int32_t layer, int32_t dummy, void * host_dev, void * dev_state);
++
++    GGML_API struct ggml_tensor * ggml_moe_join(
++        struct ggml_context * ctx,
++        struct ggml_tensor * cached, struct ggml_tensor * slots,
++        int32_t layer, int32_t dummy, void * host_dev, void * dev_state);
++
+     // A: m columns, n rows,
+     // B: p columns, n rows,
+     // result is m columns, p rows
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
+index f5e261c..f779efd 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -2293,6 +2293,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+             {
+                 // nop
+             } break;
++        case GGML_OP_MOE_POST:
++        case GGML_OP_MOE_JOIN:
++            {
++                GGML_ABORT("MOE_POST/MOE_JOIN are CUDA-only and never scheduled on the CPU");
++            }
+         case GGML_OP_COUNT:
+             {
+                 GGML_ABORT("fatal error");
+@@ -2625,6 +2630,11 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
+             {
+                 n_tasks = 1;
+             } break;
++        case GGML_OP_MOE_POST:
++        case GGML_OP_MOE_JOIN:
++            {
++                n_tasks = 1;
++            } break;
+         case GGML_OP_COUNT:
+             {
+                 GGML_ABORT("fatal error");
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.cpp b/ggml/src/ggml-cpu/ggml-cpu.cpp
+index 8cece71..8126319 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.cpp
++++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
+@@ -440,6 +440,9 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
+     }
+ 
+     switch (op->op) {
++        case GGML_OP_MOE_POST:
++        case GGML_OP_MOE_JOIN:
++            return false; // CUDA only
+         case GGML_OP_CPY:
+         case GGML_OP_SET_ROWS:
+             return
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index f0a83c2..104dd01 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -68,6 +68,7 @@
+ #include "ggml-cuda/cumsum.cuh"
+ #include "ggml-cuda/fill.cuh"
+ #include "ggml-cuda/lightning-indexer.cuh"
++#include "ggml-cuda/moe-sidecar.cuh"
+ #include "ggml.h"
+ 
+ #include <algorithm>
+@@ -2183,6 +2184,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
+                     return false;
+             }
+             break;
++        case GGML_OP_MOE_POST:
++            ggml_cuda_op_moe_post(ctx, dst);
++            break;
++        case GGML_OP_MOE_JOIN:
++            ggml_cuda_op_moe_join(ctx, dst);
++            break;
+         case GGML_OP_GLU:
+             switch (ggml_get_glu_op(dst)) {
+                 case GGML_GLU_OP_REGLU:
+@@ -4919,6 +4926,11 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+                     return false;
+             }
+             break;
++        case GGML_OP_MOE_POST:
++            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_I32 &&
++                   op->src[2]->type == GGML_TYPE_I32;
++        case GGML_OP_MOE_JOIN:
++            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_I32;
+         case GGML_OP_GLU:
+             switch (ggml_get_glu_op(op)) {
+                 case GGML_GLU_OP_REGLU:
+@@ -5525,6 +5537,15 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+     if (strcmp(name, "ggml_backend_unregister_host_buffer") == 0) {
+         return (void *)ggml_backend_cuda_unregister_host_buffer;
+     }
++    if (strcmp(name, "ggml_backend_cuda_moe_sc_alloc") == 0) {
++        return (void *)ggml_backend_cuda_moe_sc_alloc;
++    }
++    if (strcmp(name, "ggml_backend_cuda_moe_sc_free") == 0) {
++        return (void *)ggml_backend_cuda_moe_sc_free;
++    }
++    if (strcmp(name, "ggml_backend_cuda_moe_sc_selftest") == 0) {
++        return (void *)ggml_backend_cuda_moe_sc_selftest;
++    }
+     if (strcmp(name, "ggml_backend_cuda_memcpy_h2d_batch") == 0) {
+         return (void *)ggml_backend_cuda_memcpy_h2d_batch;
+     }
+diff --git a/ggml/src/ggml-cuda/moe-sidecar.cu b/ggml/src/ggml-cuda/moe-sidecar.cu
+new file mode 100644
+index 0000000..d091b17
+--- /dev/null
++++ b/ggml/src/ggml-cuda/moe-sidecar.cu
+@@ -0,0 +1,283 @@
++// MoE sidecar: the GPU publishes a layer's routed ids (and its input, if any
++// routed expert is not in the device cache) to mapped host memory, carries on
++// with the cached experts, and joins the host's rows afterwards. Protocol and
++// layout in ggml/include/ggml-moe-sidecar.h.
++//
++// Relies on a running kernel and a host thread seeing each other's stores to
++// mapped pinned memory without a stream synchronisation in between. That is
++// observed on this card and driver but not promised by the CUDA docs, which is
++// why ggml_backend_cuda_moe_sc_selftest exists and the caller runs it first.
++
++#include "moe-sidecar.cuh"
++#include "ggml-moe-sidecar.h"
++
++#include <atomic>
++#include <cstring>
++#include <thread>
++
++#define MOE_SC_TIMEOUT_NS 1000000000ull
++
++static __device__ __forceinline__ uint64_t moe_sc_now() {
++    uint64_t t;
++    asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
++    return t;
++}
++
++static void moe_sc_params(const ggml_tensor * t, int & layer, int & dummy,
++                          ggml_moe_sc_ctl *& ctl, ggml_moe_sc_dev *& dev) {
++    const int32_t * p = (const int32_t *) t->op_params;
++    layer = p[0];
++    dummy = p[1];
++    memcpy(&ctl, p + 2, sizeof(void *));
++    memcpy(&dev, p + 4, sizeof(void *));
++}
++
++static __global__ void k_moe_post(const float * x, float * out, const int32_t * ids, const int32_t * slots,
++                                  int n_used, int n_embd, int layer, int dummy,
++                                  ggml_moe_sc_ctl * ctl, float * host_x, ggml_moe_sc_dev * dev) {
++    __shared__ int      s_miss;
++    __shared__ uint32_t s_seq;
++    if (threadIdx.x == 0) {
++        int miss = 0;
++        for (int e = 0; e < n_used; ++e) {
++            miss |= slots[e] == dummy;
++        }
++        s_miss = miss;
++        s_seq  = dev->seq;
++    }
++    __syncthreads();
++    const int      miss = s_miss;
++    const uint32_t seq  = s_seq;
++    for (int i = threadIdx.x; i < n_embd; i += blockDim.x) {
++        const float v = x[i];
++        out[i] = v;
++        if (miss) {
++            host_x[i] = v;
++        }
++    }
++    if (threadIdx.x < n_used) {
++        ctl->ids[layer][threadIdx.x] = ids[threadIdx.x];
++    }
++    if (threadIdx.x == 0) {
++        ggml_moe_sc_record * r = &ctl->ring[seq % GGML_MOE_SC_RING];
++        r->seq   = seq;
++        r->layer = (uint32_t) layer;
++        r->miss  = (uint32_t) miss;
++    }
++    // every thread's stores reach the system before thread 0 announces them
++    __threadfence_system();
++    __syncthreads();
++    if (threadIdx.x == 0) {
++        dev->posted_seq[layer]  = seq;
++        dev->posted_miss[layer] = (uint32_t) miss;
++        dev->seq = seq + 1;
++        __threadfence_system();
++        *(volatile uint32_t *) &ctl->head = seq + 1;
++    }
++}
++
++// one block per routed expert
++static __global__ void k_moe_join(const float * cached, float * out, const int32_t * slots,
++                                  int n_embd, int layer, int dummy,
++                                  ggml_moe_sc_ctl * ctl, const float * rows, const ggml_moe_sc_dev * dev) {
++    const int e = blockIdx.x;
++    __shared__ int s_host;
++    if (threadIdx.x == 0) {
++        int host = 0;
++        if (dev->posted_miss[layer] && slots[e] == dummy) {
++            const uint32_t want = dev->posted_seq[layer] + 1;
++            const uint64_t t0   = moe_sc_now();
++            host = 1;
++            while (*(volatile const uint32_t *) &ctl->resp[layer] != want) {
++                if (*(volatile const uint32_t *) &ctl->err != 0) {
++                    host = 0;
++                    break;
++                }
++                if (moe_sc_now() - t0 > MOE_SC_TIMEOUT_NS) {
++                    *(volatile uint32_t *) &ctl->err = 1;
++                    __threadfence_system();
++                    host = 0;
++                    break;
++                }
++            }
++            __threadfence_system();
++        }
++        s_host = host;
++    }
++    __syncthreads();
++    const volatile float * r = rows + (size_t) e * n_embd;
++    const float * c = cached + (size_t) e * n_embd;
++    float *       o = out    + (size_t) e * n_embd;
++    for (int i = threadIdx.x; i < n_embd; i += blockDim.x) {
++        // same order as ggml_add(host_rows, cached), where a cached expert's host row is +0
++        const float h = s_host ? r[i] : 0.0f;
++        o[i] = h + c[i];
++    }
++}
++
++void ggml_cuda_op_moe_post(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
++    const ggml_tensor * x     = dst->src[0];
++    const ggml_tensor * ids   = dst->src[1];
++    const ggml_tensor * slots = dst->src[2];
++    int layer, dummy;
++    ggml_moe_sc_ctl * ctl;
++    ggml_moe_sc_dev * dev;
++    moe_sc_params(dst, layer, dummy, ctl, dev);
++    const int n_embd = (int) x->ne[0];
++    float * host_x = ggml_moe_sc_x(ctl, n_embd, layer);
++    k_moe_post<<<1, 256, 0, ctx.stream()>>>((const float *) x->data, (float *) dst->data,
++        (const int32_t *) ids->data, (const int32_t *) slots->data, (int) ggml_nelements(ids), n_embd,
++        layer, dummy, ctl, host_x, dev);
++    CUDA_CHECK(cudaGetLastError());
++}
++
++void ggml_cuda_op_moe_join(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
++    const ggml_tensor * cached = dst->src[0];
++    const ggml_tensor * slots  = dst->src[1];
++    int layer, dummy;
++    ggml_moe_sc_ctl * ctl;
++    ggml_moe_sc_dev * dev;
++    moe_sc_params(dst, layer, dummy, ctl, dev);
++    const int n_embd = (int) cached->ne[0];
++    const float * rows = ggml_moe_sc_rows(ctl, n_embd, layer);
++    k_moe_join<<<(int) cached->ne[1], 256, 0, ctx.stream()>>>((const float *) cached->data, (float *) dst->data,
++        (const int32_t *) slots->data, n_embd, layer, dummy, ctl, rows, dev);
++    CUDA_CHECK(cudaGetLastError());
++}
++
++extern "C" bool ggml_backend_cuda_moe_sc_alloc(int device, int n_embd, void ** host, void ** host_dev, void ** dev_state) {
++    ggml_cuda_set_device(device);
++    const size_t bytes = ggml_moe_sc_host_bytes(n_embd);
++    *host = nullptr;
++    *dev_state = nullptr;
++    if (cudaHostAlloc(host, bytes, cudaHostAllocMapped | cudaHostAllocPortable) != cudaSuccess) {
++        (void) cudaGetLastError();
++        return false;
++    }
++    memset(*host, 0, bytes);
++    if (cudaHostGetDevicePointer(host_dev, *host, 0) != cudaSuccess ||
++        cudaMalloc(dev_state, sizeof(ggml_moe_sc_dev)) != cudaSuccess ||
++        cudaMemset(*dev_state, 0, sizeof(ggml_moe_sc_dev)) != cudaSuccess ||
++        cudaDeviceSynchronize() != cudaSuccess) {
++        (void) cudaGetLastError();
++        ggml_backend_cuda_moe_sc_free(*host, *dev_state);
++        *host = nullptr;
++        *dev_state = nullptr;
++        return false;
++    }
++    return true;
++}
++
++extern "C" void ggml_backend_cuda_moe_sc_free(void * host, void * dev_state) {
++    if (host) {
++        cudaFreeHost(host);
++    }
++    if (dev_state) {
++        cudaFree(dev_state);
++    }
++}
++
++// ---------------------------------------------------------------- self-test --
++
++static __host__ __device__ float moe_sc_pattern(uint32_t k, int i, uint32_t salt) {
++    uint32_t h = k * 2654435761u ^ (uint32_t) i * 40503u ^ salt;
++    h ^= h >> 13;
++    h *= 0x5bd1e995u;
++    h ^= h >> 15;
++    return (float) (h & 0xffffff) * (1.0f / 16777216.0f) - 0.5f;
++}
++
++#define MOE_SC_TEST_N 1024
++
++// n round trips through the same words and buffers the decode path uses
++static __global__ void k_moe_sc_selftest(ggml_moe_sc_ctl * ctl, float * host_x, const float * rows, int n, unsigned int * bad) {
++    __shared__ int s_ok;
++    for (int k = 0; k < n; ++k) {
++        for (int i = threadIdx.x; i < MOE_SC_TEST_N; i += blockDim.x) {
++            host_x[i] = moe_sc_pattern((uint32_t) k, i, 0x1234u);
++        }
++        __threadfence_system();
++        __syncthreads();
++        if (threadIdx.x == 0) {
++            *(volatile uint32_t *) &ctl->head = (uint32_t) k + 1;
++            const uint64_t t0 = moe_sc_now();
++            int ok = 1;
++            while (*(volatile const uint32_t *) &ctl->resp[0] != (uint32_t) k + 1) {
++                if (moe_sc_now() - t0 > MOE_SC_TIMEOUT_NS) {
++                    ok = 0;
++                    break;
++                }
++            }
++            __threadfence_system();
++            s_ok = ok;
++        }
++        __syncthreads();
++        if (!s_ok) {
++            if (threadIdx.x == 0) {
++                atomicAdd(bad, (unsigned int) (n - k));
++            }
++            return;
++        }
++        const volatile float * r = rows;
++        for (int i = threadIdx.x; i < MOE_SC_TEST_N; i += blockDim.x) {
++            if (r[i] != moe_sc_pattern((uint32_t) k, i, 0x9876u)) {
++                atomicAdd(bad, 1u);
++            }
++        }
++        __syncthreads();
++    }
++}
++
++extern "C" int ggml_backend_cuda_moe_sc_selftest(int device, int n) {
++    void * host = nullptr;
++    void * host_dev = nullptr;
++    void * dev_state = nullptr;
++    if (!ggml_backend_cuda_moe_sc_alloc(device, MOE_SC_TEST_N, &host, &host_dev, &dev_state)) {
++        return -1;
++    }
++    ggml_moe_sc_ctl * ctl = (ggml_moe_sc_ctl *) host;
++    unsigned int * bad = nullptr;
++    cudaStream_t stream = nullptr;
++    if (cudaMalloc(&bad, sizeof(unsigned int)) != cudaSuccess || cudaMemset(bad, 0, sizeof(unsigned int)) != cudaSuccess ||
++        cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess) {
++        (void) cudaGetLastError();
++        cudaFree(bad);
++        ggml_backend_cuda_moe_sc_free(host, dev_state);
++        return -1;
++    }
++    std::atomic<int> host_bad{0};
++    std::atomic<bool> stop{false};
++    std::thread echo([&]() {
++        volatile uint32_t * head = &ctl->head;
++        const float * x = ggml_moe_sc_x(host, MOE_SC_TEST_N, 0);
++        float * rows = ggml_moe_sc_rows(host, MOE_SC_TEST_N, 0);
++        for (int k = 0; k < n && !stop.load(std::memory_order_relaxed); ) {
++            if (__atomic_load_n(head, __ATOMIC_ACQUIRE) != (uint32_t) k + 1) {
++                continue;
++            }
++            for (int i = 0; i < MOE_SC_TEST_N; ++i) {
++                if (x[i] != moe_sc_pattern((uint32_t) k, i, 0x1234u)) {
++                    host_bad.fetch_add(1, std::memory_order_relaxed);
++                }
++                rows[i] = moe_sc_pattern((uint32_t) k, i, 0x9876u);
++            }
++            __atomic_store_n(&ctl->resp[0], (uint32_t) k + 1, __ATOMIC_RELEASE);
++            ++k;
++        }
++    });
++    k_moe_sc_selftest<<<1, 256, 0, stream>>>((ggml_moe_sc_ctl *) host_dev, ggml_moe_sc_x(host_dev, MOE_SC_TEST_N, 0),
++                                             ggml_moe_sc_rows(host_dev, MOE_SC_TEST_N, 0), n, bad);
++    const cudaError_t err = cudaStreamSynchronize(stream);
++    stop.store(true);
++    echo.join();
++    unsigned int dev_bad = 0;
++    cudaMemcpy(&dev_bad, bad, sizeof(dev_bad), cudaMemcpyDeviceToHost);
++    cudaStreamDestroy(stream);
++    cudaFree(bad);
++    ggml_backend_cuda_moe_sc_free(host, dev_state);
++    if (err != cudaSuccess) {
++        (void) cudaGetLastError();
++        return -1;
++    }
++    return (int) dev_bad + host_bad.load();
++}
+diff --git a/ggml/src/ggml-cuda/moe-sidecar.cuh b/ggml/src/ggml-cuda/moe-sidecar.cuh
+new file mode 100644
+index 0000000..1523806
+--- /dev/null
++++ b/ggml/src/ggml-cuda/moe-sidecar.cuh
+@@ -0,0 +1,8 @@
++#include "common.cuh"
++
++void ggml_cuda_op_moe_post(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
++void ggml_cuda_op_moe_join(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
++
++extern "C" bool ggml_backend_cuda_moe_sc_alloc(int device, int n_embd, void ** host, void ** host_dev, void ** dev_state);
++extern "C" void ggml_backend_cuda_moe_sc_free(void * host, void * dev_state);
++extern "C" int  ggml_backend_cuda_moe_sc_selftest(int device, int n);
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index 20c8ef9..e9ea806 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -1114,9 +1114,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
+ 
+     "GLU",
+     "MOE_ROWS",
++    "MOE_POST",
++    "MOE_JOIN",
+ };
+ 
+-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
++static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
+ 
+ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
+     "none",
+@@ -1230,9 +1232,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
+ 
+     "glu(x)",
+     "moe_rows(x)",
++    "moe_post(x)",
++    "moe_join(x)",
+ };
+ 
+-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
++static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
+ 
+ static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
+ 
+@@ -3399,6 +3403,48 @@ struct ggml_tensor * ggml_moe_rows(
+     return result;
+ }
+ 
++static void ggml_moe_sc_set_params(struct ggml_tensor * t, int32_t layer, int32_t dummy,
++                                   void * host_dev, void * dev_state) {
++    GGML_ASSERT(layer >= 0 && layer < 128);
++    int32_t params[6] = { layer, dummy, 0, 0, 0, 0 };
++    memcpy(params + 2, &host_dev, sizeof(void *));
++    memcpy(params + 4, &dev_state, sizeof(void *));
++    ggml_set_op_params(t, params, sizeof(params));
++}
++
++struct ggml_tensor * ggml_moe_post(
++        struct ggml_context * ctx,
++        struct ggml_tensor * x, struct ggml_tensor * ids, struct ggml_tensor * slots,
++        int32_t layer, int32_t dummy, void * host_dev, void * dev_state) {
++    GGML_ASSERT(x->type == GGML_TYPE_F32 && ggml_is_contiguous(x) && ggml_nrows(x) == 1);
++    GGML_ASSERT(ids->type == GGML_TYPE_I32 && slots->type == GGML_TYPE_I32);
++    GGML_ASSERT(ggml_nelements(ids) == ggml_nelements(slots) && ggml_nelements(ids) <= 16);
++    GGML_ASSERT(ggml_is_contiguous(ids) && ggml_is_contiguous(slots));
++    struct ggml_tensor * result = ggml_dup_tensor(ctx, x);
++    result->op = GGML_OP_MOE_POST;
++    result->src[0] = x;
++    result->src[1] = ids;
++    result->src[2] = slots;
++    ggml_moe_sc_set_params(result, layer, dummy, host_dev, dev_state);
++    return result;
++}
++
++struct ggml_tensor * ggml_moe_join(
++        struct ggml_context * ctx,
++        struct ggml_tensor * cached, struct ggml_tensor * slots,
++        int32_t layer, int32_t dummy, void * host_dev, void * dev_state) {
++    GGML_ASSERT(cached->type == GGML_TYPE_F32 && ggml_is_contiguous(cached));
++    GGML_ASSERT(cached->ne[2] == 1 && cached->ne[3] == 1);
++    GGML_ASSERT(slots->type == GGML_TYPE_I32 && ggml_is_contiguous(slots));
++    GGML_ASSERT(ggml_nelements(slots) == cached->ne[1] && cached->ne[1] <= 16);
++    struct ggml_tensor * result = ggml_dup_tensor(ctx, cached);
++    result->op = GGML_OP_MOE_JOIN;
++    result->src[0] = cached;
++    result->src[1] = slots;
++    ggml_moe_sc_set_params(result, layer, dummy, host_dev, dev_state);
++    return result;
++}
++
+ // ggml_out_prod
+ 
+ static inline bool ggml_can_out_prod(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 4beab96..715bc9e 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1825,6 +1825,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
+ 
+         ggml_status status;
+ 
++        llama_moe_cache_begin_ubatch(ubatch.n_tokens);
+         const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
+ 
+         if (!res) {
+@@ -2039,6 +2040,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
+         synchronize();
+     }
+     llama_moe_cache_step();
++    if (!llama_moe_cache_sidecar_ok()) {
++        LLAMA_LOG_ERROR("%s: MoE sidecar exchange failed or timed out; this decode's output is not valid\n", __func__);
++        return -3;
++    }
+ 
+     return 0;
+ }
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 4c364e7..46ad4f7 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -2310,7 +2310,17 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+ 
+         const char * fused_env = getenv("LLAMA_MOE_FUSED_CPU");
+         const float fused_limit = il >= 0 ? hparams.swiglu_clamp_exp[il] : 0.0f;
+-        if (fused_env && atoi(fused_env) != 0 && fused_limit <= 1e-6f) {
++        // Sidecar: the missed experts are computed by a host thread while the
++        // GPU runs the cached chain, so the layer never leaves the GPU. Same
++        // op and order on the host as the fused path, hence the same rows.
++        const bool sidecar = mcache->sc_host_dev != nullptr && fused_limit <= 1e-6f;
++        ggml_tensor * cache_inp = mc_inp;
++        if (sidecar) {
++            ggml_tensor * sel = ggml_is_contiguous(selected_experts) ? selected_experts : ggml_cont(ctx0, selected_experts);
++            cache_inp = ggml_moe_post(ctx0, mc_inp, sel, mc_slot_ids, il, mcache->n_slots,
++                                      mcache->sc_host_dev, mcache->sc_dev_state);
++            cb(cache_inp, "ffn_moe_sc_post", il);
++        } else if (fused_env && atoi(fused_env) != 0 && fused_limit <= 1e-6f) {
+             experts = ggml_moe_rows(ctx0, up_exps, mc_inp, selected_experts,
+                                     mcache->host_table, gate_exps, down_exps, mcache->n_slots);
+             cb(experts, "ffn_moe_cpu_fused", il);
+@@ -2318,8 +2328,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+ 
+         // device-side chain over the cached experts, mirroring the LLM_FFN_SILU
+         // activation above (the only type_op the cache path is enabled for)
+-        ggml_tensor * up_g   = ggml_mul_mat_id(ctx0, mcache->up_c,   mc_inp, mc_slot_ids);
+-        ggml_tensor * gate_g = ggml_mul_mat_id(ctx0, mcache->gate_c, mc_inp, mc_slot_ids);
++        ggml_tensor * up_g   = ggml_mul_mat_id(ctx0, mcache->up_c,   cache_inp, mc_slot_ids);
++        ggml_tensor * gate_g = ggml_mul_mat_id(ctx0, mcache->gate_c, cache_inp, mc_slot_ids);
+         cb(up_g,   "ffn_moe_cache_up",   il);
+         cb(gate_g, "ffn_moe_cache_gate", il);
+ 
+@@ -2345,7 +2355,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         ggml_tensor * down_g = ggml_mul_mat_id(ctx0, mcache->down_c, act_g, mc_slot_ids);
+         cb(down_g, "ffn_moe_cache_down", il);
+ 
+-        experts = ggml_add(ctx0, experts, down_g);
++        if (sidecar) {
++            experts = ggml_moe_join(ctx0, down_g, mc_slot_ids, il, mcache->n_slots,
++                                    mcache->sc_host_dev, mcache->sc_dev_state);
++        } else {
++            experts = ggml_add(ctx0, experts, down_g);
++        }
+         cb(experts, "ffn_moe_cache_merged", il);
+     }
+ 
+diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
+index 00d502f..b678890 100644
+--- a/src/llama-moecache.cpp
++++ b/src/llama-moecache.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include "ggml.h"
+ #include "ggml-backend.h"
++#include "ggml-moe-sidecar.h"
+ 
+ #include <cinttypes>
+ #include <condition_variable>
+@@ -23,6 +24,12 @@
+ #include <algorithm>
+ #include <thread>
+ #include <vector>
++#if defined(__x86_64__) || defined(_M_X64)
++#include <immintrin.h>
++#define MOE_SC_PAUSE() _mm_pause()
++#else
++#define MOE_SC_PAUSE() ((void) 0)
++#endif
+ 
+ namespace {
+ 
+@@ -98,8 +105,39 @@ struct upload_job {
+     bool    spec = false;   // issued from a prediction, not from a real miss
+ };
+ 
++// CPU side of the MoE sidecar (LLAMA_MOE_SIDECAR=1). The decode graph posts
++// each cached layer's routed ids, and its input when an expert missed, to
++// mapped host memory and keeps going; this thread observes the routing and
++// computes the missed rows with the same op the fused CPU path uses, then
++// answers. See ggml/include/ggml-moe-sidecar.h for the channel.
++struct moe_sidecar {
++    void * host      = nullptr;   // mapped pinned channel, host view
++    void * host_dev  = nullptr;   // the same memory, device view
++    void * dev_state = nullptr;   // sequence counter, device memory
++    void (*free_fn)(void *, void *) = nullptr;
++    int    n_embd    = 0;
++
++    ggml_backend_t cpu = nullptr;
++    std::vector<ggml_context *> ctxs;
++    std::vector<ggml_cgraph *>  graph;     // by model layer: MOE_ROWS over the channel buffers
++    std::vector<ggml_tensor *>  obs_ids;   // by model layer: ids view for routing-only records
++    std::vector<const char *>   gate_name; // by model layer
++
++    std::thread             thr;
++    std::mutex              m;
++    std::condition_variable cv;
++    std::atomic<bool>       active{false};
++    bool                    quit = false;
++    uint32_t                consumed = 0;  // serve thread only, read by step() after it idles
++    std::atomic<uint32_t>   consumed_pub{0};
++    bool                    failed = false;
++
++    uint64_t n_records = 0, n_miss_records = 0, serve_ns = 0;
++};
++
+ struct moe_cache {
+     int32_t n_slots     = 0;
++    moe_sidecar * sc    = nullptr;
+     int32_t max_inserts = 2;
+     bool freeze_cache = false;
+     bool deterministic = false;
+@@ -802,6 +840,132 @@ static void load_slot_profile(const char * spec, int32_t dflt) {
+             g_slot_profile.size(), dflt);
+ }
+ 
++
++void sidecar_serve(moe_cache * mc) {
++    moe_sidecar * sc = mc->sc;
++    auto * ctl = (ggml_moe_sc_ctl *) sc->host;
++    for (;;) {
++        {
++            std::unique_lock<std::mutex> lk(sc->m);
++            sc->cv.wait(lk, [sc]() { return sc->quit || sc->active.load(); });
++            if (sc->quit) {
++                return;
++            }
++        }
++        while (sc->active.load(std::memory_order_acquire)) {
++            const uint32_t head = __atomic_load_n(&ctl->head, __ATOMIC_ACQUIRE);
++            if (sc->consumed == head) {
++                MOE_SC_PAUSE();
++                continue;
++            }
++            const ggml_moe_sc_record rec = ctl->ring[sc->consumed % GGML_MOE_SC_RING];
++            const int il = (int) rec.layer;
++            if (rec.seq != sc->consumed || il >= (int) sc->graph.size() || !sc->graph[il]) {
++                fprintf(stderr, "moe-cache: sidecar channel error: record seq %u layer %d, expected seq %u\n",
++                        rec.seq, il, sc->consumed);
++                sc->failed = true;
++            } else if (rec.miss) {
++                const auto t0 = std::chrono::steady_clock::now();
++                // computes the missed rows and observes the routing, exactly as the fused CPU op does in-graph
++                if (ggml_backend_graph_compute(sc->cpu, sc->graph[il]) != GGML_STATUS_SUCCESS) {
++                    fprintf(stderr, "moe-cache: sidecar CPU compute failed for layer %d\n", il);
++                    sc->failed = true;
++                } else {
++                    __atomic_store_n(&ctl->resp[il], rec.seq + 1, __ATOMIC_RELEASE);
++                }
++                sc->serve_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
++                    std::chrono::steady_clock::now() - t0).count();
++                sc->n_miss_records++;
++            } else {
++                moe_obs_cb(sc->gate_name[il], sc->obs_ids[il], mc);
++            }
++            sc->n_records++;
++            sc->consumed++;
++            sc->consumed_pub.store(sc->consumed, std::memory_order_release);
++        }
++    }
++}
++
++void sidecar_init(moe_cache * mc, int n_used) {
++    ggml_backend_reg_t reg = ggml_backend_reg_by_name("CUDA");
++    auto sc_alloc = reg ? (bool (*)(int, int, void **, void **, void **))
++        ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_moe_sc_alloc") : nullptr;
++    auto sc_free  = reg ? (void (*)(void *, void *))
++        ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_moe_sc_free") : nullptr;
++    auto sc_test  = reg ? (int (*)(int, int))
++        ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_moe_sc_selftest") : nullptr;
++    if (!sc_alloc || !sc_free || !sc_test) {
++        fprintf(stderr, "moe-cache: sidecar DISABLED (CUDA backend has no sidecar entry points)\n");
++        return;
++    }
++    const int n_test = 10000;
++    const int failed = sc_test(0, n_test);
++    if (failed != 0) {
++        fprintf(stderr, "moe-cache: sidecar DISABLED (self-test failed: %d of %d exchanges)\n", failed, n_test);
++        return;
++    }
++    int n_embd = 0;
++    for (const auto & ls : mc->layers) {
++        if (ls.pub.il >= GGML_MOE_SC_MAX_LAYERS || n_used > GGML_MOE_SC_MAX_USED) {
++            fprintf(stderr, "moe-cache: sidecar DISABLED (layer %d out of the channel's range)\n", ls.pub.il);
++            return;
++        }
++        n_embd = std::max(n_embd, (int) ls.pub.up_src->ne[0]);
++    }
++    auto * sc = new moe_sidecar();
++    sc->n_embd  = n_embd;
++    sc->free_fn = sc_free;
++    if (!sc_alloc(0, n_embd, &sc->host, &sc->host_dev, &sc->dev_state)) {
++        fprintf(stderr, "moe-cache: sidecar DISABLED (mapped host allocation failed)\n");
++        delete sc;
++        return;
++    }
++    sc->cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
++    GGML_ASSERT(sc->cpu);
++    {
++        ggml_backend_reg_t cpu_reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(sc->cpu));
++        auto set_threads = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_set_n_threads");
++        int n_threads = 8;
++        if (const char * e = getenv("LLAMA_MOE_SIDECAR_THREADS")) {
++            n_threads = std::max(1, atoi(e));
++        }
++        if (set_threads) {
++            set_threads(sc->cpu, n_threads);
++        }
++        fprintf(stderr, "moe-cache: sidecar CPU threads %d\n", n_threads);
++    }
++    sc->graph.assign(GGML_MOE_SC_MAX_LAYERS, nullptr);
++    sc->obs_ids.assign(GGML_MOE_SC_MAX_LAYERS, nullptr);
++    sc->gate_name.assign(GGML_MOE_SC_MAX_LAYERS, nullptr);
++    auto * ctl = (ggml_moe_sc_ctl *) sc->host;
++    for (const auto & ls : mc->layers) {
++        const llama_moe_cache_layer & p = ls.pub;
++        const int il = p.il;
++        ggml_init_params ip = { 16 * ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
++        ggml_context * ctx = ggml_init(ip);
++        sc->ctxs.push_back(ctx);
++        ggml_tensor * x   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, p.up_src->ne[0], 1, 1);
++        ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_used, 1);
++        x->data   = ggml_moe_sc_x(sc->host, n_embd, il);
++        ids->data = ctl->ids[il];
++        ggml_tensor * rows = ggml_moe_rows(ctx, p.up_src, x, ids, p.host_table, p.gate_src, p.down_src, p.n_slots);
++        rows->data = ggml_moe_sc_rows(sc->host, n_embd, il);
++        ggml_cgraph * gf = ggml_new_graph_custom(ctx, 8, false);
++        ggml_build_forward_expand(gf, rows);
++        sc->graph[il]     = gf;
++        sc->obs_ids[il]   = ids;
++        sc->gate_name[il] = p.gate_src->name;
++    }
++    mc->sc = sc;
++    for (auto & ls : mc->layers) {
++        ls.pub.sc_host_dev  = sc->host_dev;
++        ls.pub.sc_dev_state = sc->dev_state;
++    }
++    sc->thr = std::thread(sidecar_serve, mc);
++    fprintf(stderr, "moe-cache: sidecar ENABLED (self-test %d/%d, %zu layers, %.1f MiB mapped)\n",
++            n_test, n_test, mc->layers.size(), ggml_moe_sc_host_bytes(n_embd) / 1048576.0);
++}
++
+ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t max_inserts) {
+     std::lock_guard<std::mutex> init_lock(g_init_mtx);
+     if (g_init_done) {
+@@ -1286,6 +1450,9 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+         if (mc->spec_probation) {
+             fprintf(stderr, "moe-cache: speculative uploads enter on probation\n");
+         }
++        if (const char * e = getenv("LLAMA_MOE_SIDECAR"); e && atoi(e) != 0) {
++            sidecar_init(mc, (int) model.hparams.n_expert_used);
++        }
+         fflush(stderr);
+ 
+         ggml_set_moe_obs_callback(moe_obs_cb, mc);
+@@ -1313,7 +1480,49 @@ const llama_moe_cache_layer * llama_moe_cache_lookup(const ggml_tensor * up_exps
+ // Replay overwrites physical slots; deterministic publication must include every
+ // routing callback from the completed graph before waiting for its uploads.
+ bool llama_moe_cache_requires_sync() {
+-    return g_cache && (g_cache->deterministic || g_cache->map_replay);
++    return g_cache && (g_cache->deterministic || g_cache->map_replay || g_cache->sc);
++}
++
++void llama_moe_cache_begin_ubatch(uint32_t n_tokens) {
++    moe_cache * mc = g_cache;
++    if (!mc || !mc->sc || n_tokens != 1) {
++        return;
++    }
++    {
++        std::lock_guard<std::mutex> lk(mc->sc->m);
++        mc->sc->active.store(true, std::memory_order_release);
++    }
++    mc->sc->cv.notify_one();
++}
++
++bool llama_moe_cache_sidecar_ok() {
++    moe_cache * mc = g_cache;
++    if (!mc || !mc->sc) {
++        return true;
++    }
++    const auto * ctl = (const ggml_moe_sc_ctl *) mc->sc->host;
++    return !mc->sc->failed && __atomic_load_n(&ctl->err, __ATOMIC_ACQUIRE) == 0;
++}
++
++// Called after the graph has completed: every record it posted is in the ring.
++// Wait for the serve thread to take them all, then let it sleep.
++static void sidecar_drain(moe_sidecar * sc) {
++    if (!sc->active.load(std::memory_order_acquire)) {
++        return;
++    }
++    const auto * ctl = (const ggml_moe_sc_ctl *) sc->host;
++    const uint32_t head = __atomic_load_n(&ctl->head, __ATOMIC_ACQUIRE);
++    const auto t0 = std::chrono::steady_clock::now();
++    while (sc->consumed_pub.load(std::memory_order_acquire) != head && !sc->failed) {
++        if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(2)) {
++            fprintf(stderr, "moe-cache: sidecar did not drain (%u of %u records)\n",
++                    sc->consumed_pub.load(), head);
++            sc->failed = true;
++            break;
++        }
++        MOE_SC_PAUSE();
++    }
++    sc->active.store(false, std::memory_order_release);
+ }
+ 
+ void llama_moe_cache_step() {
+@@ -1321,6 +1530,9 @@ void llama_moe_cache_step() {
+     if (!mc) {
+         return;
+     }
++    if (mc->sc) {
++        sidecar_drain(mc->sc);
++    }
+ 
+     if (mc->deterministic) {
+         const auto start = std::chrono::steady_clock::now();
+@@ -1524,6 +1736,11 @@ void llama_moe_cache_step() {
+ 
+     map_frame(mc);
+     if (mc->route_trace) GGML_ASSERT(fflush(mc->route_trace) == 0);
++    if (mc->sc && mc->n_steps % 512 == 0 && mc->sc->n_records) {
++        fprintf(stderr, "moe-cache: sidecar %" PRIu64 " records, %" PRIu64 " with a miss, %.1f us CPU per miss record\n",
++                mc->sc->n_records, mc->sc->n_miss_records,
++                mc->sc->n_miss_records ? mc->sc->serve_ns / 1000.0 / mc->sc->n_miss_records : 0.0);
++    }
+     if (mc->deterministic && mc->n_steps % 512 == 0) {
+         fprintf(stderr, "moe-cache: publication wait %.2f us/step\n",
+                 mc->publication_wait_ns / 1000.0 / mc->n_steps);
+diff --git a/src/llama-moecache.h b/src/llama-moecache.h
+index 721cf42..3659422 100644
+--- a/src/llama-moecache.h
++++ b/src/llama-moecache.h
+@@ -57,6 +57,12 @@ struct llama_moe_cache_layer {
+     // delta of each other. nullptr when the feature is off, and then the
+     // graph is byte-for-byte the one it was before.
+     ggml_tensor * prior = nullptr;
++
++    // MoE sidecar channel (LLAMA_MOE_SIDECAR=1): device view of the mapped
++    // host block and the device sequence state. nullptr when the sidecar is
++    // off, and then the graph is the fused/CPU one.
++    void * sc_host_dev  = nullptr;
++    void * sc_dev_state = nullptr;
+ };
+ 
+ // build the cache for every host-resident expert layer of the model.
+@@ -69,5 +75,11 @@ const llama_moe_cache_layer * llama_moe_cache_lookup(const ggml_tensor * up_exps
+ // apply throttled LRU updates; call between graph executions only
+ void llama_moe_cache_step();
+ 
+-// Diagnostic replay and deterministic publication require a completed graph.
++// Diagnostic replay, deterministic publication and the sidecar require a completed graph.
+ bool llama_moe_cache_requires_sync();
++
++// Wake the sidecar serve thread before a single-token graph runs.
++void llama_moe_cache_begin_ubatch(uint32_t n_tokens);
++
++// false once a sidecar exchange has failed or timed out; the decode that saw it must fail
++bool llama_moe_cache_sidecar_ok();
