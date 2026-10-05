@@ -39,3 +39,29 @@ If S3 falls short of 145, the estimate in spec 6.7 is wrong somewhere: the
 next step is the split profiler on the sidecar build, not tuning. The paired
 gain over the fused path is reported either way. Conditions: 175 W power
 limit; no other compute process on the GPU (the harness refuses otherwise).
+
+## Predictive in-token prefetch, pre-registered 2026-10-04 (before it ran)
+
+`LLAMA_MOE_PREDICT_INTOKEN=1`, with `LLAMA_MOE_PREDICTOR` and
+`LLAMA_MOE_EARLY_ISSUE=1`. While layer L is observed, the trained predictor
+(`models/predictor-real.bin`: the experts layer L+1 used last token and the
+experts layer L uses now) names the top 3 experts layer L+1 will want. Their
+copies start at once, and the upload worker makes each one usable by the GPU
+the moment its copy lands, instead of at the end of the token. That timing
+limit is why prediction measured as a loss in this project before: a guess
+for layer L+1 could not be used until the next token.
+
+What makes a mid-token table write safe: the predicted expert goes into a slot
+that is in no table, and one aligned 4-byte table word flips from the dummy
+slot to it. A graph that read the table before the flip sees a miss, one that
+reads it after sees a hit. Since this commit the host computes exactly the
+experts the GPU's table marked missed (the GPU posts its slot ids), not what
+the host's own table says, so a flip can never leave a row uncomputed. The
+server log counts predictions used in time, routed but too late, and unused.
+
+| # | test | gate |
+|---|---|---|
+| S5 | `experiments/x5_predict_bench.py`: arm 0 sidecar + early issue, arm 1 the same + predictor + in-token publication + probation; 3 rounds × 23 prompts × 200 tokens | **≥ +2 tok/s paired** (spec section 7: prediction has to earn its place) and no sidecar error |
+
+Runs after S2 passes, whatever S3 and S4 give. If it fails, the in-time /
+late / unused counters say whether the predictor or the timing is at fault.

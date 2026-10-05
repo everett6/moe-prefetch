@@ -42,7 +42,7 @@ static void echo_loop(echo_state * st) {
         }
         const ggml_moe_sc_record rec = ctl->ring[done % GGML_MOE_SC_RING];
         for (int e = 0; e < N_USED; ++e) {
-            if (ctl->ids[rec.layer][e] != st->ids[e]) {
+            if (ctl->ids[rec.layer][e] != st->ids[e] || ctl->slots[rec.layer][e] != st->slots[e]) {
                 st->bad_ids++;
             }
         }
