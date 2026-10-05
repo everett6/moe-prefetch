@@ -1,0 +1,7 @@
+{
+  "model": "/home/everett/.lmstudio/models/lmstudio-community/Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+  "n_predict": 200,
+  "deterministic_publication": false,
+  "pairs": [],
+  "completed": false
+}

@@ -1,0 +1,1 @@
+Write a poem in the style of Emily Dickinson. There should be 4 verses. Second and fourth lines in each verse need to rhyme. The poem should have a duck in it, and someone lying in bed. Give the poem a title also in Emily Dickinson style.

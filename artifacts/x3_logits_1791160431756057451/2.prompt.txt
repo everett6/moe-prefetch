@@ -1,0 +1,3 @@
+I made this list in Python and I want to be able to randomly choose a dinner every day from it. Can you use it to write a program for a random meal every night?
+
+mealplan = ["Lemon Chicken and Herb Rice", "Chile Pork and Black Beans", "Pepper Steak and Romaine Salad", "Pork Chops and Baked Potato", "Salmon and Roasted Asparagus", "Pasta Primavera and Garlic Bread"]

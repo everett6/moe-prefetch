@@ -1,0 +1,12 @@
+0.00.069.187 W DEPRECATED: --mmap and --no-mmap are deprecated. use --load-mode mmap instead
+moe-cache: slot profile: 31 layers overridden (default 56)
+moe-cache: expert weights live in buffer 'CUDA_Host' (host=1)
+0.00.417.486 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+moe-cache: slot profile: 31 layers overridden (default 56)
+moe-cache: expert weights live in buffer 'CUDA_Host' (host=1)
+moe-cache: deterministic publication DISABLED; map record=1 replay=0
+moe-cache: fused CPU rows DISABLED (unclamped SwiGLU only)
+moe-cache: batched uploads ENABLED (one sync per expert)
+moe-cache: admission gate WINDOW (second miss within 8 steps)
+moe-cache: table writes BATCHED (one synchronise per step)
+0.12.476.185 I cmn          init: llama threadpool init, n_threads = 16

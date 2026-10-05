@@ -389,7 +389,7 @@ index d720996..4c364e7 100644
          // activation above (the only type_op the cache path is enabled for)
          ggml_tensor * up_g   = ggml_mul_mat_id(ctx0, mcache->up_c,   mc_inp, mc_slot_ids);
 diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
-index 2365411..e1d54db 100644
+index 2365411..00d502f 100644
 --- a/src/llama-moecache.cpp
 +++ b/src/llama-moecache.cpp
 @@ -101,6 +101,13 @@ struct upload_job {
@@ -435,10 +435,10 @@ index 2365411..e1d54db 100644
 +void map_frame(moe_cache * mc) {
 +    if (mc->map_replay) {
 +        uint64_t step = UINT64_MAX;
-+        GGML_ASSERT(fscanf(mc->map_replay, "step %" SCNu64 "\n", &step) == 1 && step == mc->n_steps);
++        GGML_ASSERT(fscanf(mc->map_replay, " step %" SCNu64, &step) == 1 && step == mc->n_steps);
 +        for (auto & ls : mc->layers) {
 +            int il = -1;
-+            GGML_ASSERT(fscanf(mc->map_replay, "map %d", &il) == 1 && il == ls.pub.il);
++            GGML_ASSERT(fscanf(mc->map_replay, " map %d", &il) == 1 && il == ls.pub.il);
 +            std::vector<int32_t> desired(ls.pub.n_slots);
 +            std::vector<bool> seen(ls.expert_slot.size(), false);
 +            for (auto & expert : desired) {

@@ -179,3 +179,43 @@ Each test runs once, in this order, on the same build:
 publication is usable as the exactness harness for step 2. Conditions: power
 limit 175 W; no other compute process on the GPU (desktop only); RAM and swap
 sampled each second.
+
+## Re-run results (2026-10-04)
+
+**T1 PASS.** Build, and 810 of 810 CPU comparisons bit-identical.
+
+**T2 PASS.** The first attempt aborted on its first replay arm before
+producing any result: the map reader's `fscanf("map %d")` did not skip the
+newline left by the previous line (a literal in a scanf format does not skip
+whitespace), so every frame failed at its second layer. Fixed to `" map %d"`
+and `" step ..."` in patch 0008; that attempt is void, not failed, and its
+directory was kept (`artifacts/x3_logits_1791160346844711926`). Re-run,
+`artifacts/x3_logits_1791160431756057451`:
+
+| prompt | REPLAY-0 unequal logits | REPLAY-1 unequal logits | routes match |
+|---|---|---|---|
+| github_issues:00767 | 0 | 0 | both |
+| no_robots:00385 | 0 | 0 | both |
+| no_robots:00535 | 0 | 0 | both |
+| se_decision:00435 | 0 | 0 | both |
+
+Each is 200 steps × 151,936 logits compared bit for bit, teacher-forced on the
+live run's tokens. The control matched, so replay is faithful, and the fused
+chain matched under it: **the fused op does not change the arithmetic.** The
+four live divergences of the first run were placement timing.
+
+**T3 PASS.** `artifacts/x3_fused_1791160666205664919.json`, live cache, 69
+pairs: original 119.57, fused 124.23 tok/s, **+4.67 ± 0.39** (gate +4),
+better on 64 of 69. By round: +5.40 ± 0.41, +6.00 ± 0.73, +2.60 ± 0.67. Zero
+live output mismatches this time (not gated). Host swapped in about 270 MB
+and swapped out nothing during the run; GPU peaked at 10,182 MiB, 47 C.
+
+**T4 PASS.** `artifacts/x3_fused_1791161164295237983.json`, deterministic
+publication: zero output mismatches in 69 pairs, so deterministic publication
+removes the timing dependence and can serve as the exactness harness for
+step 2. It costs throughput: 114.54 → 118.92 tok/s (+4.37 ± 0.64), about 5
+tok/s below the live-cache arms of T3. Diagnostic only.
+
+**Step 1 passes** (T1, T2, T3). The first run's failure is recorded above;
+the difference between the two runs is that the first one's round 0 ran
+about 20 tok/s slow in both arms, on a host that was swapping.

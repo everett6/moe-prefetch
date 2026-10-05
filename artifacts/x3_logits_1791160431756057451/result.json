@@ -1,0 +1,115 @@
+{
+  "model": "/home/everett/.lmstudio/models/lmstudio-community/Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+  "n_predict": 200,
+  "deterministic_publication": false,
+  "pairs": [
+    {
+      "id": "github_issues:00767",
+      "record": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "replay_0": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "replay_1": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "routes_replay_0_match_record": true,
+      "routes_replay_1_match_record": true
+    },
+    {
+      "id": "no_robots:00385",
+      "record": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "replay_0": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "replay_1": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "routes_replay_0_match_record": true,
+      "routes_replay_1_match_record": true
+    },
+    {
+      "id": "no_robots:00535",
+      "record": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "replay_0": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "replay_1": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "routes_replay_0_match_record": true,
+      "routes_replay_1_match_record": true
+    },
+    {
+      "id": "se_decision:00435",
+      "record": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "replay_0": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "replay_1": {
+        "steps": 200,
+        "vocab": 151936,
+        "unequal_logits": 0,
+        "first_difference_step": -1,
+        "max_abs_difference": 0
+      },
+      "routes_replay_0_match_record": true,
+      "routes_replay_1_match_record": true
+    }
+  ],
+  "completed": true,
+  "replay_control_identical": true,
+  "fused_identical": true,
+  "gate_passed": true
+}

@@ -1,0 +1,28 @@
+How to get rid of develop branch for simplified Git flow
+
+In a continuously developed web project (not a product) we currently have the following branching strategy, roughly based on git flow:
+
+develop branch: latest working version
+master branch: version to be released / released version
+feature branches: features in development
+hotfix branches: urgent bugfixes in released version
+
+Master is read only, updated via pull requests from develop or hotfix branches. Each update results in a release candidate being built and deployed to the staging system. Release candidates are deployed to production after manual approval.
+
+Feature branches are created based off develop, or from the last commit that has been merged into master. A pull request from a feature branch to develop is built, deployed to a free test system where integration tests and acceptance tests (automatic & manual) are executed. When successfully tested and reviewed, the PR gets merged, so that it will become part of the next release (i.e. merge from develop to master).
+
+My goal
+I would like to simplify this and get rid of the develop branch. The develop branch has mostly historical reasons and since it is always a successfully tested version, I think it is unnecessary to keep it separated from master. Removing it will also simplify the release process because there is no additional merge anymore.
+
+I have the following constraints:
+
+releases are scheduled and should not be fully automated
+while feature branches are typically short lived, some stay unmerged for several weeks (e.g. a redesign) but need to be tested as well (currently as open pull requests to develop)
+sometimes a single feature should be released outside the regular release, effectively turning it into a hotfix. With the current strategy I can rebase a feature branch and merge it directly into master
+it also happens that we need to hold back features after acceptance tests with external systems on staging failed
+
+Where I am not sure about the transition:
+
+currently I am building pull requests for testing and merge commits for releases. Can I unify this?
+how to deal with hotfixes when the master is ahead of the latest release. Should I build and deploy releases directly from hotfix branches?
+is there a sensible way to deal with features that should be excluded from a release after they have already been merged? Is a separate develop branch really an advantage for these cases? Most of the time I end up reverting and re-reverting commits manually anyways.
