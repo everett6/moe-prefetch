@@ -618,10 +618,26 @@ index 20c8ef9..e9ea806 100644
  
  static inline bool ggml_can_out_prod(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 4beab96..715bc9e 100644
+index 4beab96..16c0b1c 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1825,6 +1825,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
+@@ -94,6 +94,7 @@ llama_context::llama_context(
+     LLAMA_LOG_INFO("%s: constructing llama_context\n", __func__);
+ 
+     llama_moe_cache_init(model, params.n_moe_cache_slots, params.n_moe_cache_inserts);
++    llama_moe_cache_claim(this);
+ 
+     t_start_us = model.t_start_us;
+     t_load_us  = model.t_load_us;
+@@ -485,6 +486,7 @@ llama_context::llama_context(
+ llama_context::~llama_context() {
+     // wait for any pending asynchronous copies into the output buffers before they are freed
+     synchronize();
++    llama_moe_cache_shutdown(this);
+ 
+     if (!model.hparams.no_alloc) {
+         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+@@ -1825,6 +1827,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
  
          ggml_status status;
  
@@ -629,7 +645,7 @@ index 4beab96..715bc9e 100644
          const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
  
          if (!res) {
-@@ -2039,6 +2040,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
+@@ -2039,6 +2042,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
          synchronize();
      }
      llama_moe_cache_step();
@@ -689,7 +705,7 @@ index 4c364e7..46ad4f7 100644
      }
  
 diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
-index 00d502f..619aa10 100644
+index 00d502f..9f54da5 100644
 --- a/src/llama-moecache.cpp
 +++ b/src/llama-moecache.cpp
 @@ -11,6 +11,7 @@
@@ -795,7 +811,7 @@ index 00d502f..619aa10 100644
              }
          }
      }
-@@ -802,6 +855,198 @@ static void load_slot_profile(const char * spec, int32_t dflt) {
+@@ -802,6 +855,246 @@ static void load_slot_profile(const char * spec, int32_t dflt) {
              g_slot_profile.size(), dflt);
  }
  
@@ -820,6 +836,8 @@ index 00d502f..619aa10 100644
 +    mc->n_published++;
 +}
 +
++static bool sc_debug();
++
 +void sidecar_serve(moe_cache * mc) {
 +    moe_sidecar * sc = mc->sc;
 +    auto * ctl = (ggml_moe_sc_ctl *) sc->host;
@@ -839,12 +857,14 @@ index 00d502f..619aa10 100644
 +            }
 +            const ggml_moe_sc_record rec = ctl->ring[sc->consumed % GGML_MOE_SC_RING];
 +            const int il = (int) rec.layer;
++            if (sc_debug()) fprintf(stderr, "sc-debug: record seq=%u layer=%d miss=%u\n", rec.seq, il, rec.miss);
 +            if (rec.seq != sc->consumed || il >= (int) sc->graph.size() || !sc->graph[il]) {
 +                fprintf(stderr, "moe-cache: sidecar channel error: record seq %u layer %d, expected seq %u\n",
 +                        rec.seq, il, sc->consumed);
 +                sc->failed = true;
 +            } else if (rec.miss) {
 +                const auto t0 = std::chrono::steady_clock::now();
++                if (sc_debug()) fprintf(stderr, "sc-debug: computing layer %d\n", il);
 +                std::vector<int32_t> & mt = sc->miss_table[il];
 +                const int n_used = (int) sc->obs_ids[il]->ne[0];
 +                for (int e = 0; e < n_used; ++e) {
@@ -991,10 +1011,54 @@ index 00d502f..619aa10 100644
 +            n_test, n_test, mc->layers.size(), ggml_moe_sc_host_bytes(n_embd) / 1048576.0);
 +}
 +
++// Stop the upload workers and the sidecar thread before the model and the
++// backends go away. A worker still copying an expert when the context is
++// destroyed reads freed host weights and aborts the process; that race
++// existed before the sidecar and only its timing changed. After this the
++// cache is gone: a later context on the same model runs without it.
++static const void * g_owner = nullptr;
++
++void llama_moe_cache_claim(const void * owner) {
++    if (g_cache && !g_owner) {
++        g_owner = owner;
++    }
++}
++
++void llama_moe_cache_shutdown(const void * owner) {
++    moe_cache * mc = g_cache;
++    if (!mc || owner != g_owner) {
++        return;
++    }
++    g_owner = nullptr;
++    g_cache = nullptr;
++    ggml_set_moe_obs_callback(nullptr, nullptr);
++    {
++        std::lock_guard<std::mutex> lk(mc->wmtx);
++        mc->stop = true;
++    }
++    mc->wcv.notify_all();
++    for (auto & t : mc->workers) {
++        if (t.joinable()) {
++            t.join();
++        }
++    }
++    if (mc->sc) {
++        {
++            std::lock_guard<std::mutex> lk(mc->sc->m);
++            mc->sc->quit = true;
++            mc->sc->active.store(false);
++        }
++        mc->sc->cv.notify_all();
++        if (mc->sc->thr.joinable()) {
++            mc->sc->thr.join();
++        }
++    }
++}
++
  void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t max_inserts) {
      std::lock_guard<std::mutex> init_lock(g_init_mtx);
      if (g_init_done) {
-@@ -1222,7 +1467,17 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+@@ -1222,7 +1515,17 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
                                  mc->h2d_batch ? 1 : 0);
                          fflush(stderr);
                      }
@@ -1013,7 +1077,7 @@ index 00d502f..619aa10 100644
                          std::lock_guard<std::mutex> lk(mc->wmtx);
                          j.done = true;
                          mc->done.push_back(j);
-@@ -1286,6 +1541,9 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+@@ -1286,6 +1589,9 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
          if (mc->spec_probation) {
              fprintf(stderr, "moe-cache: speculative uploads enter on probation\n");
          }
@@ -1023,7 +1087,7 @@ index 00d502f..619aa10 100644
          fflush(stderr);
  
          ggml_set_moe_obs_callback(moe_obs_cb, mc);
-@@ -1313,7 +1571,49 @@ const llama_moe_cache_layer * llama_moe_cache_lookup(const ggml_tensor * up_exps
+@@ -1313,7 +1619,65 @@ const llama_moe_cache_layer * llama_moe_cache_lookup(const ggml_tensor * up_exps
  // Replay overwrites physical slots; deterministic publication must include every
  // routing callback from the completed graph before waiting for its uploads.
  bool llama_moe_cache_requires_sync() {
@@ -1031,9 +1095,20 @@ index 00d502f..619aa10 100644
 +    return g_cache && (g_cache->deterministic || g_cache->map_replay || g_cache->sc);
 +}
 +
++static bool sc_debug() {
++    static int v = -1;
++    if (v < 0) { const char * e = getenv("LLAMA_MOE_SIDECAR_DEBUG"); v = e && atoi(e) != 0; }
++    return v == 1;
++}
++
 +void llama_moe_cache_begin_ubatch(uint32_t n_tokens) {
 +    moe_cache * mc = g_cache;
-+    if (!mc || !mc->sc || n_tokens != 1) {
++    if (sc_debug()) fprintf(stderr, "sc-debug: begin_ubatch n_tokens=%u step=%" PRIu64 "\n", n_tokens, mc ? mc->n_steps : 0);
++    // Every batch, not only single-token ones: a model's last layer computes
++    // only the rows that produce output, so a prefill batch runs that layer
++    // with one token and takes the sidecar path too.
++    GGML_UNUSED(n_tokens);
++    if (!mc || !mc->sc) {
 +        return;
 +    }
 +    {
@@ -1049,7 +1124,12 @@ index 00d502f..619aa10 100644
 +        return true;
 +    }
 +    const auto * ctl = (const ggml_moe_sc_ctl *) mc->sc->host;
-+    return !mc->sc->failed && __atomic_load_n(&ctl->err, __ATOMIC_ACQUIRE) == 0;
++    const bool ok = !mc->sc->failed && __atomic_load_n(&ctl->err, __ATOMIC_ACQUIRE) == 0;
++    if (!ok) {
++        fprintf(stderr, "moe-cache: sidecar failure state: failed=%d err=%u head=%u consumed=%u step=%" PRIu64 "\n",
++                (int) mc->sc->failed, ctl->err, ctl->head, mc->sc->consumed_pub.load(), mc->n_steps);
++    }
++    return ok;
 +}
 +
 +// Called after the graph has completed: every record it posted is in the ring.
@@ -1074,7 +1154,7 @@ index 00d502f..619aa10 100644
  }
  
  void llama_moe_cache_step() {
-@@ -1321,6 +1621,9 @@ void llama_moe_cache_step() {
+@@ -1321,6 +1685,9 @@ void llama_moe_cache_step() {
      if (!mc) {
          return;
      }
@@ -1084,7 +1164,7 @@ index 00d502f..619aa10 100644
  
      if (mc->deterministic) {
          const auto start = std::chrono::steady_clock::now();
-@@ -1524,6 +1827,16 @@ void llama_moe_cache_step() {
+@@ -1524,6 +1891,16 @@ void llama_moe_cache_step() {
  
      map_frame(mc);
      if (mc->route_trace) GGML_ASSERT(fflush(mc->route_trace) == 0);
@@ -1102,7 +1182,7 @@ index 00d502f..619aa10 100644
          fprintf(stderr, "moe-cache: publication wait %.2f us/step\n",
                  mc->publication_wait_ns / 1000.0 / mc->n_steps);
 diff --git a/src/llama-moecache.h b/src/llama-moecache.h
-index 721cf42..3659422 100644
+index 721cf42..03041bf 100644
 --- a/src/llama-moecache.h
 +++ b/src/llama-moecache.h
 @@ -57,6 +57,12 @@ struct llama_moe_cache_layer {
@@ -1118,7 +1198,7 @@ index 721cf42..3659422 100644
  };
  
  // build the cache for every host-resident expert layer of the model.
-@@ -69,5 +75,11 @@ const llama_moe_cache_layer * llama_moe_cache_lookup(const ggml_tensor * up_exps
+@@ -69,5 +75,16 @@ const llama_moe_cache_layer * llama_moe_cache_lookup(const ggml_tensor * up_exps
  // apply throttled LRU updates; call between graph executions only
  void llama_moe_cache_step();
  
@@ -1126,8 +1206,13 @@ index 721cf42..3659422 100644
 +// Diagnostic replay, deterministic publication and the sidecar require a completed graph.
  bool llama_moe_cache_requires_sync();
 +
-+// Wake the sidecar serve thread before a single-token graph runs.
++// Wake the sidecar serve thread before a graph runs (any batch size: see the .cpp).
 +void llama_moe_cache_begin_ubatch(uint32_t n_tokens);
++
++// The context that was current when the cache came up owns it; only the
++// owner's destruction stops the cache's threads, before the model and backends are freed.
++void llama_moe_cache_claim(const void * owner);
++void llama_moe_cache_shutdown(const void * owner);
 +
 +// false once a sidecar exchange has failed or timed out; the decode that saw it must fail
 +bool llama_moe_cache_sidecar_ok();

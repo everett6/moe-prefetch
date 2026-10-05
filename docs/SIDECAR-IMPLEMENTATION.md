@@ -65,3 +65,25 @@ server log counts predictions used in time, routed but too late, and unused.
 
 Runs after S2 passes, whatever S3 and S4 give. If it fails, the in-time /
 late / unused counters say whether the predictor or the timing is at fault.
+
+## S2, first attempt: void, three bugs found (2026-10-04)
+
+The first S2 run stopped on its sidecar arm before producing any logits: the
+first decode returned the sidecar's error. Nothing wrong was returned; the
+watchdog did its job. Three bugs, fixed in 0009 before S2 is run again:
+
+1. **Prefill takes the sidecar path too.** A model's last layer computes only
+   the rows that produce output, so a 44-token prefill batch runs layer 47
+   with one token, which is the cache path. The serve thread was woken only
+   for one-token batches, so that layer's post went unanswered and the GPU
+   gave up after 1 s. The thread is now woken for every batch.
+2. **Upload workers outlived the model.** Nothing stopped the cache's upload
+   threads, so one still copying an expert when the program ended read freed
+   memory and aborted. This race predates the sidecar; the sidecar's timing
+   exposed it. The context that brings the cache up now owns it and stops
+   its threads (workers and serve thread) first thing in its destructor.
+3. An exit-handler version of that fix ran too late (after `main`'s
+   destructors) and was replaced by 2.
+
+Checked after the fix: three sidecar runs and one fused-only run of 20
+tokens, all exit 0 with no sidecar error.
