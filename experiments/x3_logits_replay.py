@@ -22,11 +22,17 @@ import r3_real_bench as bench
 from x3_output_control import IDS
 
 
-def main():
+# (name, environment for the arm, replays the RECORD arm's placement map)
+ARMS = (("record", {"LLAMA_MOE_FUSED_CPU": "0"}, False),
+        ("replay_0", {"LLAMA_MOE_FUSED_CPU": "0"}, True),
+        ("replay_1", {"LLAMA_MOE_FUSED_CPU": "1"}, True))
+
+
+def main(arms=ARMS, tag="x3_logits"):
     runner = fused.ROOT / "cpp/build/moe-logits"
     if not runner.is_file():
         raise RuntimeError("build cpp/moe-logits.cpp first")
-    root = fused.ROOT / "artifacts" / f"x3_logits_{time.time_ns()}"
+    root = fused.ROOT / "artifacts" / f"{tag}_{time.time_ns()}"
     root.mkdir()
     result = {"model": bench.MODEL, "n_predict": bench.N_PREDICT,
               "deterministic_publication": fused.DETERMINISTIC, "pairs": [], "completed": False}
@@ -41,12 +47,12 @@ def main():
                 logits = Path(tmp) / "logits.bin"
                 tokens = prefix.with_suffix(".tokens.bin")
                 row = {"id": pid}
-                for arm, enabled, replay in (("record", 0, False), ("replay_0", 0, True), ("replay_1", 1, True)):
+                for arm, arm_env, replay in arms:
                     bench.gpu_guard(f"LOGITS-{arm}")
                     env = dict(bench.ENV)
                     for name in ("MOE_LOGITS_OUT", "MOE_LOGITS_REFERENCE", "MOE_FORCE_TOKENS", "MOE_TOKENS_OUT"):
                         env.pop(name, None)
-                    env["LLAMA_MOE_FUSED_CPU"] = str(enabled)
+                    env.update(arm_env)
                     trace = prefix.with_suffix(f".routes-{arm}.txt")
                     env["LLAMA_MOE_ROUTE_TRACE"] = str(trace)
                     if replay:
@@ -64,18 +70,18 @@ def main():
                         raise RuntimeError(f"logits runner failed: {prefix}, arm {arm}, exit {proc.returncode}")
                     row[arm] = json.loads(proc.stdout.strip().splitlines()[-1])
                     print(f"{pid} {arm}: {row[arm]}", flush=True)
-                routes = {arm: prefix.with_suffix(f".routes-{arm}.txt").read_bytes()
-                          for arm in ("record", "replay_0", "replay_1")}
-                row["routes_replay_0_match_record"] = routes["replay_0"] == routes["record"]
-                row["routes_replay_1_match_record"] = routes["replay_1"] == routes["record"]
+                record = prefix.with_suffix(".routes-record.txt").read_bytes()
+                for arm, _, replay in arms:
+                    if replay:
+                        row[f"routes_{arm}_match_record"] = prefix.with_suffix(f".routes-{arm}.txt").read_bytes() == record
                 result["pairs"].append(row)
         result["completed"] = True
-        result["replay_control_identical"] = all(
-            r["replay_0"]["unequal_logits"] == 0 and r["routes_replay_0_match_record"] for r in result["pairs"])
-        result["fused_identical"] = all(
-            r["replay_1"]["unequal_logits"] == 0 and r["routes_replay_1_match_record"] for r in result["pairs"])
-        result["gate_passed"] = result["replay_control_identical"] and result["fused_identical"]
-        print(json.dumps({k: result[k] for k in ("replay_control_identical", "fused_identical", "gate_passed")}), flush=True)
+        for arm, _, replay in arms:
+            if replay:
+                result[f"{arm}_identical"] = all(
+                    r[arm]["unequal_logits"] == 0 and r[f"routes_{arm}_match_record"] for r in result["pairs"])
+        result["gate_passed"] = all(result[f"{arm}_identical"] for arm, _, replay in arms if replay)
+        print(json.dumps({k: v for k, v in result.items() if k.endswith("_identical") or k == "gate_passed"}), flush=True)
     finally:
         (root / "result.json").write_text(json.dumps(result, indent=2))
         print(f"saved {root / 'result.json'}", flush=True)

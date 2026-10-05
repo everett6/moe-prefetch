@@ -37,6 +37,13 @@ if "Qwen3-30B-A3B-Instruct-2507" not in bench.MODEL:
     bench.ENV.pop("LLAMA_MOE_SLOT_PROFILE")
 
 
+# arm -> (extra environment, banner its server log must print). Arm 1 is the treatment.
+ARMS = {0: ({"LLAMA_MOE_FUSED_CPU": "0"}, "fused CPU rows DISABLED"),
+        1: ({"LLAMA_MOE_FUSED_CPU": "1"}, "fused CPU rows ENABLED")}
+TAG = "x3_fused"
+LABEL = "FUSED"
+
+
 def completion(text, n_predict):
     start = time.monotonic()
     r = requests.post(f"http://127.0.0.1:{bench.PORT}/completion",
@@ -89,7 +96,7 @@ def main():
         raise RuntimeError("no benchmark prompts available")
     out = {"binary": bench.BIN, "model": bench.MODEL, "rounds": bench.ROUNDS,
            "n_predict": bench.N_PREDICT, "deterministic_publication": DETERMINISTIC, "measurements": [], "telemetry": [], "completed": False}
-    path = ROOT / "artifacts" / f"x3_fused_{time.time_ns()}.json"
+    path = ROOT / "artifacts" / f"{TAG}_{time.time_ns()}.json"
     stop = threading.Event()
     monitor = threading.Thread(target=telemetry, args=(stop, out["telemetry"]), daemon=True)
     monitor.start()
@@ -98,9 +105,10 @@ def main():
         for rnd in range(bench.ROUNDS):
             # Alternate arm order to reduce drift; each arm gets a fresh server.
             for fused in ([0, 1] if rnd % 2 == 0 else [1, 0]):
-                label = f"FUSED-{fused}"
-                bench.EXPECT[label] = "fused CPU rows " + ("ENABLED" if fused else "DISABLED")
-                p, vram = bench.launch(label, bench.BASE56, {"LLAMA_MOE_FUSED_CPU": str(fused)})
+                label = f"{LABEL}-{fused}"
+                arm_env, banner = ARMS[fused]
+                bench.EXPECT[label] = banner
+                p, vram = bench.launch(label, bench.BASE56, dict(arm_env))
                 try:
                     if fitted is None:
                         fitted = [r for r in selected if bench.tokenize(r["text"]) <= bench.CTX - bench.N_PREDICT - 64]
