@@ -87,3 +87,20 @@ watchdog did its job. Three bugs, fixed in 0009 before S2 is run again:
 
 Checked after the fix: three sidecar runs and one fused-only run of 20
 tokens, all exit 0 with no sidecar error.
+
+## S2 PASS (2026-10-04)
+
+`artifacts/x4_logits_*` (second run): on all four prompts, 200 steps × 151,936
+logits, REPLAY-S (sidecar) and REPLAY-F (fused) have zero unequal logits
+against RECORD and identical routing traces. The sidecar's asynchronous CPU
+compute gives the same arithmetic as the in-graph fused op.
+
+## S3, first attempt: void (another process took the GPU mid-run)
+
+`artifacts/x4_sidecar_1791169319105645537.json`. An Ollama server loaded a
+model during round 1; telemetry shows 10.8 GB in use and 99% busy during the
+round-1 sidecar arm (ours is 10.0 GB), and the harness then refused to start
+the next arm. Not a result. For the record only, round 0 ran before the
+other process appeared: fused 115.81, sidecar 147.09 tok/s, +31.28 ± 0.93,
+sidecar faster on 23 of 23 prompts, identical output on all 23. The gate is
+on the full three rounds, so S3 is run again.
