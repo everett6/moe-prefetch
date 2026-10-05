@@ -289,9 +289,27 @@ Ordering, which is the whole correctness argument for the channel:
 ### 6.6 Exactness and failure
 
 The GPU chain is untouched and the host rows come from the same kernels in the
-same order, so **the output is bit-for-bit the current cache's output**. That
-gives the acceptance test: at temperature 0, identical tokens to the current
-engine on every benchmark prompt.
+same order, so **for a given placement of experts the output is bit-for-bit
+the current cache's output**.
+
+*Corrected 2026-10-04.* This section first said the output would equal the
+current engine's, full stop, and made "identical tokens at temperature 0" the
+acceptance test. That cannot hold, for the current engine either. An expert
+computed on the GPU and the same expert computed on the CPU differ in the last
+bits, so the output depends on which experts are resident at each token, and
+that depends on which uploads have finished when the token boundary comes.
+Anything that changes timing changes placement. Measured on step 1 (patch
+0008, `docs/FUSED-CPU-IMPLEMENTATION.md`): with placement frozen, the original
+and fused CPU chains gave identical output on all four prompts that had
+diverged live, and the original chain alone gave different output on three of
+them frozen against live.
+
+So the acceptance test is: **record the live placement map of a run, replay
+it, and require every logit at every step to be bit-identical**, teacher-forced
+on the recorded tokens (`experiments/x3_logits_replay.py`). The same run
+replayed through the unchanged path is the control; if the control differs,
+the test says nothing. Live-run token differences are recorded but are not a
+correctness signal.
 
 A wait gives up after a bounded number of polls (about one second), sets
 `err`, and the join uses zeros; the decode call then returns an error. Wrong
@@ -344,8 +362,8 @@ benchmark.
 - `ggml_cpu_moe_rows` against the existing CPU graph on random inputs: rows
   identical. CPU only, runs anywhere.
 - The probe as a regression test of the channel on this driver.
-- End to end: identical tokens to the current engine at temperature 0 on the
-  23 prompts; the graded 24-problem quality set; 100,000 tokens with zero
+- End to end: bit-identical logits under a replayed placement map, against
+  the unchanged path under the same map (section 6.6); the graded 24-problem quality set; 100,000 tokens with zero
   channel errors.
 - The watchdog: stop the serve loop mid-token and confirm the decode call
   errors within about a second instead of hanging.
@@ -479,9 +497,9 @@ miss clustering it depends on was replayed on the 30B model only.
 | step | what | gate to continue |
 |---|---|---|
 | 0 | **done**: the measurements in sections 2 to 4, both probes | — |
-| 1 | `ggml_cpu_moe_rows`, used as one fused CPU op in the *current* scheduler | rows identical to the CPU graph; tokens identical to the current engine; ≥ +4 tok/s paired |
+| 1 | `ggml_cpu_moe_rows`, used as one fused CPU op in the *current* scheduler | rows identical to the CPU graph; logits identical under replayed placement; ≥ +4 tok/s paired |
 | 1b | upload arbiter in the current engine | ≥ +1.5 tok/s paired with admit-all; no loss with 2-in-8 |
-| 2 | `MOE_POST` / `MOE_JOIN`, the channel, the serve loop, behind `LLAMA_MOE_SIDECAR` | tokens identical to step 1; zero channel errors in 100,000 tokens; **≥ 145 tok/s** paired |
+| 2 | `MOE_POST` / `MOE_JOIN`, the channel, the serve loop, behind `LLAMA_MOE_SIDECAR` | logits identical to step 1 under replayed placement; zero channel errors in 100,000 tokens; **≥ 145 tok/s** paired |
 | 3 | stall-aware slot profile | ≥ +2 tok/s paired at equal or lower VRAM |
 | 4 | CPU-cache warming | only if a replay of the trained predictor says ≥ +2 tok/s |
 | 5 | batches up to 8 tokens through the exchange | n-gram drafting composes with the cache |

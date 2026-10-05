@@ -155,3 +155,27 @@ At the GPU check in this session, LM Studio held approximately 8.45 GiB and
 only 1.9 GiB was free, below the headroom needed by the measured MoE configuration.
 The unrelated LM Studio process was left running. No new performance or
 correctness gate result is claimed. The earlier failed gate remains in force.
+
+## Re-run, pre-registered 2026-10-04 (written and pushed before any of it ran)
+
+Why the gate changes. The first run's output gate ("zero mismatches on live
+runs") turned out to test the live cache's timing, not the fused op: the
+frozen control above shows placement alone changes greedy output. The
+correctness gate therefore moves to bit-identical logits under a replayed
+placement (spec section 6.6, corrected the same day). The speed gate is
+unchanged. The first run's failure stays recorded above; if this run passes,
+both runs are reported.
+
+Each test runs once, in this order, on the same build:
+
+| # | test | gate |
+|---|---|---|
+| T1 | `experiments/build_fused.sh`: build plus the 810 CPU comparisons | all 810 bit-identical |
+| T2 | `experiments/x3_logits_replay.py`, the four prompts that diverged, 200 tokens, three arms: RECORD (original, live), REPLAY-0 (original, replayed map), REPLAY-1 (fused, replayed map) | REPLAY-0 identical to RECORD (otherwise T2 is void, not failed) and REPLAY-1 identical: zero unequal logits and identical routing traces |
+| T3 | `experiments/x3_fused_bench.py`, live cache, 3 rounds × 23 prompts, 200 tokens, arm order alternating | paired mean gain over all 69 pairs ≥ +4 tok/s; no round dropped. Live output mismatches recorded, not gated |
+| T4 | `BENCH_DETERMINISTIC=1 experiments/x3_fused_bench.py`, same protocol | zero output mismatches between arms (tests that deterministic publication removes the timing dependence). Speed recorded, not gated |
+
+**Step 1 passes if T1, T2 and T3 pass.** T4 decides whether deterministic
+publication is usable as the exactness harness for step 2. Conditions: power
+limit 175 W; no other compute process on the GPU (desktop only); RAM and swap
+sampled each second.
