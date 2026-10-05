@@ -43,7 +43,7 @@ case "${MODEL:-qwen3-30b}" in
         ;;
 esac
 export LLAMA_MOE_BATCH_TABLES=1
-# Built from patches 0008/0009 (experiments/build_fused.sh -> ./engine):
+# Built from patches 0008/0009/0010 (experiments/build_fused.sh -> ./engine):
 #   FUSED=1    one fused CPU op per layer                   (+4.7 tok/s, same output)
 #   SIDECAR=1  missed experts computed on the CPU while the GPU runs the cached ones
 if [ "${FUSED:-0}" = 1 ] || [ "${SIDECAR:-0}" = 1 ]; then
@@ -52,6 +52,14 @@ if [ "${FUSED:-0}" = 1 ] || [ "${SIDECAR:-0}" = 1 ]; then
 fi
 if [ "${SIDECAR:-0}" = 1 ]; then
     export LLAMA_MOE_SIDECAR=1
+fi
+#   TEAM=1     (with SIDECAR=1) persistent CPU team instead of a graph per miss   (patch 0010, not yet measured)
+#   STREAM=1   (with SIDECAR=1) router lookahead streams experts in just in time  (patch 0010, not yet measured)
+if [ "${TEAM:-0}" = 1 ]; then
+    export LLAMA_MOE_SIDECAR_TEAM=1
+fi
+if [ "${STREAM:-0}" = 1 ]; then
+    export LLAMA_MOE_STREAM=1 LLAMA_MOE_EARLY_ISSUE=1
 fi
 
 if [ "$MODE" = fast ]; then

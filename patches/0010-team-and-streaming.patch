@@ -1,0 +1,2045 @@
+diff --git a/ggml/include/ggml-cpu.h b/ggml/include/ggml-cpu.h
+index 220ee26..0a17d6f 100644
+--- a/ggml/include/ggml-cpu.h
++++ b/ggml/include/ggml-cpu.h
+@@ -11,6 +11,24 @@ extern "C" {
+     // Called by every member of the compute team with shared work_data.
+     GGML_BACKEND_API void ggml_cpu_moe_rows(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+ 
++    // A persistent compute team for one-op jobs (the MoE sidecar). One OpenMP
++    // region stays open for as long as `next` keeps returning nodes, so a job
++    // costs a handshake instead of a parallel-region start and a graph plan.
++    // NULL when ggml-cpu is built without OpenMP. first_cpu >= 0 pins member i
++    // to CPU first_cpu + i. work_size: the largest ggml_graph_plan work size of
++    // the nodes it will run.
++    struct ggml_cpu_team;
++    GGML_BACKEND_API struct ggml_cpu_team * ggml_cpu_team_new(int n_threads, size_t work_size, int first_cpu);
++    GGML_BACKEND_API void ggml_cpu_team_free(struct ggml_cpu_team * team);
++    // The caller becomes member 0. `next` runs on member 0 only and returns the
++    // next node, or NULL to close the region. Every member computes the node
++    // through the same per-node path ggml_graph_compute uses; `done` then runs
++    // on member 0, after all members have finished it.
++    GGML_BACKEND_API void ggml_cpu_team_run(struct ggml_cpu_team * team,
++                                            struct ggml_tensor * (*next)(void * ud),
++                                            void (*done)(void * ud, struct ggml_tensor * node),
++                                            void * ud);
++
+     // the compute plan that needs to be prepared for ggml_graph_compute()
+     // since https://github.com/ggml-org/ggml/issues/287
+     struct ggml_cplan {
+diff --git a/ggml/include/ggml-moe-sidecar.h b/ggml/include/ggml-moe-sidecar.h
+index db133d1..80856c4 100644
+--- a/ggml/include/ggml-moe-sidecar.h
++++ b/ggml/include/ggml-moe-sidecar.h
+@@ -16,6 +16,12 @@
+ //                  writes resp[layer] = seq + 1
+ //   GPU  MOE_JOIN  if the layer missed, waits for resp[layer] == seq + 1 and
+ //                  adds the missed rows to the cached chain's output
++//
++// Lookahead (just-in-time streaming), a second ring with its own counter:
++//   GPU  MOE_AHEAD after MOE_POST of layer L, applies the routers of up to two
++//                  later layers to L's input, writes their top experts that
++//                  are not in VRAM to ahead[], then ahead_head = aseq + 1.
++//                  The host copies them and flips their table words.
+ 
+ #include <stddef.h>
+ #include <stdint.h>
+@@ -24,6 +30,7 @@
+ #define GGML_MOE_SC_RING       256
+ #define GGML_MOE_SC_MAX_USED   16
+ #define GGML_MOE_SC_ALIGN      256
++#define GGML_MOE_SC_MAX_AHEAD  8
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -33,7 +40,16 @@ struct ggml_moe_sc_record {
+     uint32_t seq;
+     uint32_t layer;
+     uint32_t miss;
+-    uint32_t pad;
++    uint32_t t_lo;   // GPU %globaltimer, low 32 bits (ns), when the record was posted
++};
++
++struct ggml_moe_sc_ahead {
++    uint32_t seq;
++    uint32_t layer;                                     // the layer whose input made the prediction
++    uint32_t n[2];                                      // candidates per target, <= GGML_MOE_SC_MAX_AHEAD
++    int32_t  target[2];                                 // model layer predicted, -1 when unused
++    uint64_t t_ns;                                      // GPU %globaltimer when posted
++    int32_t  ids[2][GGML_MOE_SC_MAX_AHEAD];             // best first, already filtered to non-resident
+ };
+ 
+ struct ggml_moe_sc_ctl {
+@@ -46,10 +62,14 @@ struct ggml_moe_sc_ctl {
+     // the slot the GPU's table gave each routed expert; the host computes
+     // exactly the experts whose slot is the dummy, whatever its own table says
+     int32_t  slots[GGML_MOE_SC_MAX_LAYERS][GGML_MOE_SC_MAX_USED]; // GPU writes
++    uint32_t ahead_head;   // GPU writes: lookahead records posted so far
++    uint32_t pad2[15];
++    struct ggml_moe_sc_ahead ahead[GGML_MOE_SC_RING];             // GPU writes
+ };
+ 
+ struct ggml_moe_sc_dev {
+     uint32_t seq;
++    uint32_t ahead_seq;
+     uint32_t posted_seq[GGML_MOE_SC_MAX_LAYERS];
+     uint32_t posted_miss[GGML_MOE_SC_MAX_LAYERS];
+ };
+diff --git a/ggml/include/ggml-rpc.h b/ggml/include/ggml-rpc.h
+index 38f3866..d561e9e 100644
+--- a/ggml/include/ggml-rpc.h
++++ b/ggml/include/ggml-rpc.h
+@@ -8,10 +8,10 @@ extern "C" {
+ 
+ #define RPC_PROTO_MAJOR_VERSION    6
+ #define RPC_PROTO_MINOR_VERSION    0
+-#define RPC_PROTO_PATCH_VERSION    2
++#define RPC_PROTO_PATCH_VERSION    3
+ 
+ #ifdef  __cplusplus
+-static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
++static_assert(GGML_OP_COUNT == 105, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
+ #endif
+ 
+ #define GGML_RPC_MAX_SERVERS       16
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+index 9beabde..6b9cb60 100644
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -602,6 +602,7 @@ extern "C" {
+         GGML_OP_MOE_ROWS,
+         GGML_OP_MOE_POST,
+         GGML_OP_MOE_JOIN,
++        GGML_OP_MOE_AHEAD,
+ 
+         GGML_OP_COUNT,
+     };
+@@ -1481,6 +1482,19 @@ extern "C" {
+         struct ggml_tensor * cached, struct ggml_tensor * slots,
+         int32_t layer, int32_t dummy, void * host_dev, void * dev_state);
+ 
++    // MoE lookahead (CUDA only, see ggml-moe-sidecar.h). For each of n_targets
++    // (1 or 2) later layers T: s_T = w[T] . (x * r[T]), the top k experts of
++    // s_T whose tbl[T] entry is dummy[T] are posted to the host. With x layer
++    // L's normed input and r[T] = g_T / g_L this is layer T's router applied
++    // to the residual normed with T's norm weight. Returns the scores, F32
++    // [n_expert, 2]; nothing reads them, the post is the point.
++    GGML_API struct ggml_tensor * ggml_moe_ahead(
++        struct ggml_context * ctx,
++        struct ggml_tensor * x,
++        struct ggml_tensor * w[2], struct ggml_tensor * r[2], struct ggml_tensor * tbl[2],
++        int32_t n_targets, int32_t layer, const int32_t target[2], const int32_t dummy[2], int32_t k,
++        void * host_dev, void * dev_state);
++
+     // A: m columns, n rows,
+     // B: p columns, n rows,
+     // result is m columns, p rows
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
+index f779efd..d417734 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -2295,8 +2295,9 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+             } break;
+         case GGML_OP_MOE_POST:
+         case GGML_OP_MOE_JOIN:
++        case GGML_OP_MOE_AHEAD:
+             {
+-                GGML_ABORT("MOE_POST/MOE_JOIN are CUDA-only and never scheduled on the CPU");
++                GGML_ABORT("MOE_POST/MOE_JOIN/MOE_AHEAD are CUDA-only and never scheduled on the CPU");
+             }
+         case GGML_OP_COUNT:
+             {
+@@ -2632,6 +2633,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
+             } break;
+         case GGML_OP_MOE_POST:
+         case GGML_OP_MOE_JOIN:
++        case GGML_OP_MOE_AHEAD:
+             {
+                 n_tasks = 1;
+             } break;
+@@ -3608,6 +3610,130 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
+     return ret;
+ }
+ 
++// Persistent team for one-op jobs (MoE sidecar). See ggml-cpu.h. Built on one
++// OpenMP region so that ggml_barrier (an omp barrier in this build) and the
++// threadpool's chunk counters work exactly as they do inside a graph.
++struct ggml_cpu_team {
++    struct ggml_threadpool * tp;
++    int                      n_threads;
++    int                      first_cpu;
++    size_t                   work_size;
++    uint8_t                * work;
++    struct ggml_tensor     * job;            // written by member 0 before gen is released
++    atomic_int GGML_CACHE_ALIGN gen;         // one increment per job handed out, NULL included
++};
++
++struct ggml_cpu_team * ggml_cpu_team_new(int n_threads, size_t work_size, int first_cpu) {
++#ifdef GGML_USE_OPENMP
++    if (n_threads < 1 || n_threads > GGML_MAX_N_THREADS) {
++        return NULL;
++    }
++    ggml_cpu_init();
++    struct ggml_cpu_team * team = ggml_aligned_malloc(sizeof(struct ggml_cpu_team));
++    if (!team) {
++        return NULL;
++    }
++    memset(team, 0, sizeof(*team));
++    struct ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
++    team->tp        = ggml_threadpool_new_impl(&tpp, NULL, NULL);
++    team->n_threads = n_threads;
++    team->first_cpu = first_cpu;
++    team->work_size = work_size;
++    team->work      = work_size ? ggml_aligned_malloc(work_size) : NULL;
++    atomic_store_explicit(&team->gen, 0, memory_order_relaxed);
++    if (!team->tp || (work_size && !team->work)) {
++        ggml_cpu_team_free(team);
++        return NULL;
++    }
++    return team;
++#else
++    GGML_UNUSED(n_threads);
++    GGML_UNUSED(work_size);
++    GGML_UNUSED(first_cpu);
++    return NULL;
++#endif
++}
++
++void ggml_cpu_team_free(struct ggml_cpu_team * team) {
++    if (!team) {
++        return;
++    }
++    if (team->tp) {
++        ggml_threadpool_free(team->tp);
++    }
++    if (team->work) {
++        ggml_aligned_free(team->work, team->work_size);
++    }
++    ggml_aligned_free(team, sizeof(struct ggml_cpu_team));
++}
++
++void ggml_cpu_team_run(struct ggml_cpu_team * team,
++                       struct ggml_tensor * (*next)(void * ud),
++                       void (*done)(void * ud, struct ggml_tensor * node),
++                       void * ud) {
++#ifdef GGML_USE_OPENMP
++    struct ggml_threadpool * tp = team->tp;
++    tp->current_chunk = 0;
++    tp->abort         = -1;
++    tp->ec            = GGML_STATUS_SUCCESS;
++    const int base = atomic_load_explicit(&team->gen, memory_order_relaxed);
++
++    #pragma omp parallel num_threads(team->n_threads)
++    {
++        #pragma omp single
++        {
++            atomic_store_explicit(&tp->n_graph, omp_get_num_threads(), memory_order_relaxed);
++        }
++        const int ith = omp_get_thread_num();
++        const int nth = omp_get_num_threads();
++        if (team->first_cpu >= 0 && team->first_cpu + ith < GGML_MAX_N_THREADS) {
++            bool mask[GGML_MAX_N_THREADS] = { false };
++            mask[team->first_cpu + ith] = true;
++            ggml_thread_apply_affinity(mask);
++        }
++        struct ggml_compute_params params = {
++            /*.ith        =*/ ith,
++            /*.nth        =*/ nth,
++            /*.wsize      =*/ team->work_size,
++            /*.wdata      =*/ team->work,
++            /*.threadpool =*/ tp,
++            /*.use_ref    =*/ false,
++        };
++        int gen = base;
++        for (;;) {
++            struct ggml_tensor * node;
++            if (ith == 0) {
++                node = next(ud);
++                team->job = node;
++                atomic_store_explicit(&team->gen, gen + 1, memory_order_release);
++            } else {
++                while (atomic_load_explicit(&team->gen, memory_order_acquire) == gen) {
++                    ggml_thread_cpu_relax();
++                }
++                node = team->job;
++            }
++            ++gen;
++            if (!node) {
++                break;
++            }
++            // member 0 cannot hand out the next job before every member has
++            // passed this barrier, so `team->job` is never overwritten early
++            ggml_compute_forward(&params, node);
++            ggml_barrier(tp);
++            if (ith == 0) {
++                done(ud, node);
++            }
++        }
++    }
++#else
++    GGML_UNUSED(team);
++    GGML_UNUSED(next);
++    GGML_UNUSED(done);
++    GGML_UNUSED(ud);
++    GGML_ABORT("ggml_cpu_team_run needs an OpenMP build; ggml_cpu_team_new returns NULL without one");
++#endif
++}
++
+ enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads) {
+     struct ggml_cplan cplan = ggml_graph_plan(cgraph, n_threads, NULL);
+ 
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.cpp b/ggml/src/ggml-cpu/ggml-cpu.cpp
+index 8126319..ef2da52 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.cpp
++++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
+@@ -442,6 +442,7 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
+     switch (op->op) {
+         case GGML_OP_MOE_POST:
+         case GGML_OP_MOE_JOIN:
++        case GGML_OP_MOE_AHEAD:
+             return false; // CUDA only
+         case GGML_OP_CPY:
+         case GGML_OP_SET_ROWS:
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 104dd01..e10ee53 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -2190,6 +2190,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
+         case GGML_OP_MOE_JOIN:
+             ggml_cuda_op_moe_join(ctx, dst);
+             break;
++        case GGML_OP_MOE_AHEAD:
++            ggml_cuda_op_moe_ahead(ctx, dst);
++            break;
+         case GGML_OP_GLU:
+             switch (ggml_get_glu_op(dst)) {
+                 case GGML_GLU_OP_REGLU:
+@@ -4931,6 +4934,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+                    op->src[2]->type == GGML_TYPE_I32;
+         case GGML_OP_MOE_JOIN:
+             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_I32;
++        case GGML_OP_MOE_AHEAD:
++            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
+         case GGML_OP_GLU:
+             switch (ggml_get_glu_op(op)) {
+                 case GGML_GLU_OP_REGLU:
+@@ -5546,6 +5551,27 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+     if (strcmp(name, "ggml_backend_cuda_moe_sc_selftest") == 0) {
+         return (void *)ggml_backend_cuda_moe_sc_selftest;
+     }
++    if (strcmp(name, "ggml_backend_cuda_moe_mover_new") == 0) {
++        return (void *)ggml_backend_cuda_moe_mover_new;
++    }
++    if (strcmp(name, "ggml_backend_cuda_moe_mover_free") == 0) {
++        return (void *)ggml_backend_cuda_moe_mover_free;
++    }
++    if (strcmp(name, "ggml_backend_cuda_moe_mover_word") == 0) {
++        return (void *)ggml_backend_cuda_moe_mover_word;
++    }
++    if (strcmp(name, "ggml_backend_cuda_moe_mover_push") == 0) {
++        return (void *)ggml_backend_cuda_moe_mover_push;
++    }
++    if (strcmp(name, "ggml_backend_cuda_moe_mover_done") == 0) {
++        return (void *)ggml_backend_cuda_moe_mover_done;
++    }
++    if (strcmp(name, "ggml_backend_cuda_moe_mover_sync") == 0) {
++        return (void *)ggml_backend_cuda_moe_mover_sync;
++    }
++    if (strcmp(name, "ggml_backend_cuda_moe_is_pinned") == 0) {
++        return (void *)ggml_backend_cuda_moe_is_pinned;
++    }
+     if (strcmp(name, "ggml_backend_cuda_memcpy_h2d_batch") == 0) {
+         return (void *)ggml_backend_cuda_memcpy_h2d_batch;
+     }
+diff --git a/ggml/src/ggml-cuda/moe-sidecar.cu b/ggml/src/ggml-cuda/moe-sidecar.cu
+index a3c695b..43f9b57 100644
+--- a/ggml/src/ggml-cuda/moe-sidecar.cu
++++ b/ggml/src/ggml-cuda/moe-sidecar.cu
+@@ -14,6 +14,7 @@
+ #include <atomic>
+ #include <cstring>
+ #include <thread>
++#include <vector>
+ 
+ #define MOE_SC_TIMEOUT_NS 1000000000ull
+ 
+@@ -64,6 +65,7 @@ static __global__ void k_moe_post(const float * x, float * out, const int32_t *
+         r->seq   = seq;
+         r->layer = (uint32_t) layer;
+         r->miss  = (uint32_t) miss;
++        r->t_lo  = (uint32_t) moe_sc_now();
+     }
+     // every thread's stores reach the system before thread 0 announces them
+     __threadfence_system();
+@@ -146,6 +148,270 @@ void ggml_cuda_op_moe_join(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+     CUDA_CHECK(cudaGetLastError());
+ }
+ 
++// ---------------------------------------------------------------- lookahead --
++
++#define MOE_AHEAD_WARPS 8
++
++// one warp per (target, expert): s = w[e] . (x * r)
++static __global__ void k_moe_ahead_scores(const float * x,
++                                          const float * w0, const float * r0,
++                                          const float * w1, const float * r1,
++                                          int n_embd, int n_expert, float * scores) {
++    const int t    = blockIdx.y;
++    const int lane = threadIdx.x % WARP_SIZE;
++    const int e    = blockIdx.x * MOE_AHEAD_WARPS + threadIdx.x / WARP_SIZE;
++    if (e >= n_expert) {
++        return;
++    }
++    const float * w = (t == 0 ? w0 : w1) + (size_t) e * n_embd;
++    const float * r = t == 0 ? r0 : r1;
++    float s = 0.0f;
++    for (int i = lane; i < n_embd; i += WARP_SIZE) {
++        s += w[i] * (x[i] * r[i]);
++    }
++    s = warp_reduce_sum(s);
++    if (lane == 0) {
++        scores[(size_t) t * n_expert + e] = s;
++    }
++}
++
++// one warp per target picks its top k (best first) and keeps the ones the
++// device table says are not resident; thread 0 then posts the record
++static __global__ void k_moe_ahead_post(const float * scores, const int32_t * tbl0, const int32_t * tbl1,
++                                        int n_targets, int n_expert, int k, int layer,
++                                        int target0, int target1, int dummy0, int dummy1,
++                                        ggml_moe_sc_ctl * ctl, ggml_moe_sc_dev * dev) {
++    __shared__ int32_t s_ids[2][GGML_MOE_SC_MAX_AHEAD];
++    __shared__ uint32_t s_n[2];
++    const int t    = threadIdx.x / WARP_SIZE;
++    const int lane = threadIdx.x % WARP_SIZE;
++    if (t < 2 && lane == 0) {
++        s_n[t] = 0;
++    }
++    __syncwarp();
++    if (t < n_targets) {
++        const float   * sc    = scores + (size_t) t * n_expert;
++        const int32_t * tbl   = t == 0 ? tbl0 : tbl1;
++        const int32_t   dummy = t == 0 ? dummy0 : dummy1;
++        uint32_t taken = 0;   // bit j: this lane's j-th expert (lane + 32 j) already picked
++        for (int round = 0; round < k; ++round) {
++            float best = -INFINITY;
++            int   bi   = -1;
++            for (int j = 0, e = lane; e < n_expert; ++j, e += WARP_SIZE) {
++                if (!(taken & (1u << j)) && (bi < 0 || sc[e] > best)) {
++                    best = sc[e];
++                    bi   = e;
++                }
++            }
++            // warp argmax; the lower expert id wins a tie
++#pragma unroll
++            for (int off = WARP_SIZE / 2; off > 0; off >>= 1) {
++                const float ob = __shfl_xor_sync(0xffffffff, best, off);
++                const int   oi = __shfl_xor_sync(0xffffffff, bi, off);
++                if (oi >= 0 && (bi < 0 || ob > best || (ob == best && oi < bi))) {
++                    best = ob;
++                    bi   = oi;
++                }
++            }
++            if (bi < 0) {
++                break;
++            }
++            if (bi % WARP_SIZE == lane) {
++                taken |= 1u << (bi / WARP_SIZE);
++            }
++            if (lane == 0 && tbl[bi] == dummy) {
++                s_ids[t][s_n[t]++] = bi;
++            }
++        }
++    }
++    __syncthreads();
++    if (threadIdx.x == 0) {
++        const uint32_t seq = dev->ahead_seq;
++        ggml_moe_sc_ahead * r = &ctl->ahead[seq % GGML_MOE_SC_RING];
++        r->seq       = seq;
++        r->layer     = (uint32_t) layer;
++        r->target[0] = target0;
++        r->target[1] = n_targets > 1 ? target1 : -1;
++        r->t_ns      = moe_sc_now();
++        for (int tt = 0; tt < 2; ++tt) {
++            const uint32_t n = tt < n_targets ? s_n[tt] : 0;
++            r->n[tt] = n;
++            for (uint32_t j = 0; j < n; ++j) {
++                r->ids[tt][j] = s_ids[tt][j];
++            }
++        }
++        __threadfence_system();
++        dev->ahead_seq = seq + 1;
++        *(volatile uint32_t *) &ctl->ahead_head = seq + 1;
++    }
++}
++
++void ggml_cuda_op_moe_ahead(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
++    const int32_t * p = (const int32_t *) dst->op_params;
++    const int layer = p[0], n_targets = p[1], target0 = p[2], target1 = p[3];
++    const int dummy0 = p[4], dummy1 = p[5], k = p[6];
++    ggml_moe_sc_ctl * ctl;
++    ggml_moe_sc_dev * dev;
++    memcpy(&ctl, p + 7, sizeof(void *));
++    memcpy(&dev, p + 9, sizeof(void *));
++    const ggml_tensor * x = dst->src[0];
++    const int n_embd   = (int) x->ne[0];
++    const int n_expert = (int) dst->src[1]->ne[1];
++    const float * w1 = n_targets > 1 ? (const float *) dst->src[4]->data : nullptr;
++    const float * r1 = n_targets > 1 ? (const float *) dst->src[5]->data : nullptr;
++    const int32_t * t1 = n_targets > 1 ? (const int32_t *) dst->src[6]->data : nullptr;
++    float * scores = (float *) dst->data;
++    const dim3 grid((n_expert + MOE_AHEAD_WARPS - 1) / MOE_AHEAD_WARPS, n_targets);
++    k_moe_ahead_scores<<<grid, MOE_AHEAD_WARPS * WARP_SIZE, 0, ctx.stream()>>>((const float *) x->data,
++        (const float *) dst->src[1]->data, (const float *) dst->src[2]->data, w1, r1, n_embd, n_expert, scores);
++    CUDA_CHECK(cudaGetLastError());
++    k_moe_ahead_post<<<1, 2 * WARP_SIZE, 0, ctx.stream()>>>(scores, (const int32_t *) dst->src[3]->data, t1,
++        n_targets, n_expert, k, layer, target0, target1, dummy0, dummy1, ctl, dev);
++    CUDA_CHECK(cudaGetLastError());
++}
++
++// --------------------------------------------------------------- copy queue --
++// The mover's copies: host->device on one non-blocking stream, each push
++// followed by an event, so completion is learned without a synchronisation.
++// A push is ordered after every earlier push, which is what makes "copy the
++// expert, then write its table word" safe as two parts of one push.
++
++struct moe_mover {
++    int                       device = 0;
++    cudaStream_t              stream = nullptr;
++    std::vector<cudaEvent_t>  ev;
++    std::vector<int64_t>      ticket;
++    int                       head = 0, count = 0;
++    int64_t                   next_ticket = 1, done_ticket = 0;
++    int32_t                 * words = nullptr;   // pinned: words[s] == s, the source of every table write
++    int                       n_words = 0;
++};
++
++extern "C" void ggml_backend_cuda_moe_mover_free(void * handle);
++
++extern "C" void * ggml_backend_cuda_moe_mover_new(int device, int max_pending, int n_words) {
++    if (max_pending < 1 || n_words < 1) {
++        return nullptr;
++    }
++    ggml_cuda_set_device(device);
++    auto * m = new moe_mover();
++    m->device  = device;
++    m->n_words = n_words;
++    bool ok = cudaStreamCreateWithFlags(&m->stream, cudaStreamNonBlocking) == cudaSuccess &&
++              cudaHostAlloc((void **) &m->words, (size_t) n_words * sizeof(int32_t), cudaHostAllocPortable) == cudaSuccess;
++    if (ok) {
++        for (int s = 0; s < n_words; ++s) {
++            m->words[s] = s;
++        }
++        m->ev.assign(max_pending, nullptr);
++        m->ticket.assign(max_pending, 0);
++        for (auto & e : m->ev) {
++            ok = ok && cudaEventCreateWithFlags(&e, cudaEventDisableTiming) == cudaSuccess;
++        }
++    }
++    if (!ok) {
++        (void) cudaGetLastError();
++        ggml_backend_cuda_moe_mover_free(m);
++        return nullptr;
++    }
++    return m;
++}
++
++extern "C" void ggml_backend_cuda_moe_mover_free(void * handle) {
++    auto * m = (moe_mover *) handle;
++    if (!m) {
++        return;
++    }
++    ggml_cuda_set_device(m->device);
++    if (m->stream) {
++        cudaStreamSynchronize(m->stream);
++    }
++    for (auto e : m->ev) {
++        if (e) {
++            cudaEventDestroy(e);
++        }
++    }
++    if (m->stream) {
++        cudaStreamDestroy(m->stream);
++    }
++    if (m->words) {
++        cudaFreeHost(m->words);
++    }
++    (void) cudaGetLastError();
++    delete m;
++}
++
++// the pinned word holding `slot`, to be used as the source of a table write
++extern "C" const int32_t * ggml_backend_cuda_moe_mover_word(void * handle, int slot) {
++    auto * m = (moe_mover *) handle;
++    return slot >= 0 && slot < m->n_words ? m->words + slot : nullptr;
++}
++
++// highest ticket whose copies have all landed; never blocks. -1 on a CUDA error.
++extern "C" int64_t ggml_backend_cuda_moe_mover_done(void * handle) {
++    auto * m = (moe_mover *) handle;
++    ggml_cuda_set_device(m->device);
++    while (m->count > 0) {
++        const cudaError_t err = cudaEventQuery(m->ev[m->head]);
++        if (err == cudaErrorNotReady) {
++            (void) cudaGetLastError();
++            break;
++        }
++        if (err != cudaSuccess) {
++            (void) cudaGetLastError();
++            return -1;
++        }
++        m->done_ticket = m->ticket[m->head];
++        m->head = (m->head + 1) % (int) m->ev.size();
++        m->count--;
++    }
++    return m->done_ticket;
++}
++
++// copies n ranges in order, then records an event. The ticket, 0 when the
++// queue is full (call done() and retry), or -1 on a CUDA error.
++extern "C" int64_t ggml_backend_cuda_moe_mover_push(void * handle, void ** dst, const void ** src, const size_t * n, int count) {
++    auto * m = (moe_mover *) handle;
++    if (m->count == (int) m->ev.size() && ggml_backend_cuda_moe_mover_done(handle) >= 0 && m->count == (int) m->ev.size()) {
++        return 0;
++    }
++    ggml_cuda_set_device(m->device);
++    for (int i = 0; i < count; ++i) {
++        if (cudaMemcpyAsync(dst[i], src[i], n[i], cudaMemcpyHostToDevice, m->stream) != cudaSuccess) {
++            (void) cudaGetLastError();
++            return -1;
++        }
++    }
++    const int slot = (m->head + m->count) % (int) m->ev.size();
++    if (cudaEventRecord(m->ev[slot], m->stream) != cudaSuccess) {
++        (void) cudaGetLastError();
++        return -1;
++    }
++    m->ticket[slot] = m->next_ticket++;
++    m->count++;
++    return m->ticket[slot];
++}
++
++// wait for everything pushed so far; the done ticket afterwards, -1 on error
++extern "C" int64_t ggml_backend_cuda_moe_mover_sync(void * handle) {
++    auto * m = (moe_mover *) handle;
++    ggml_cuda_set_device(m->device);
++    if (cudaStreamSynchronize(m->stream) != cudaSuccess) {
++        (void) cudaGetLastError();
++        return -1;
++    }
++    return ggml_backend_cuda_moe_mover_done(handle);
++}
++
++extern "C" bool ggml_backend_cuda_moe_is_pinned(const void * ptr) {
++    cudaPointerAttributes a;
++    if (cudaPointerGetAttributes(&a, ptr) != cudaSuccess) {
++        (void) cudaGetLastError();
++        return false;
++    }
++    return a.type == cudaMemoryTypeHost;
++}
++
+ extern "C" bool ggml_backend_cuda_moe_sc_alloc(int device, int n_embd, void ** host, void ** host_dev, void ** dev_state) {
+     ggml_cuda_set_device(device);
+     const size_t bytes = ggml_moe_sc_host_bytes(n_embd);
+diff --git a/ggml/src/ggml-cuda/moe-sidecar.cuh b/ggml/src/ggml-cuda/moe-sidecar.cuh
+index 1523806..fe8864a 100644
+--- a/ggml/src/ggml-cuda/moe-sidecar.cuh
++++ b/ggml/src/ggml-cuda/moe-sidecar.cuh
+@@ -2,7 +2,16 @@
+ 
+ void ggml_cuda_op_moe_post(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+ void ggml_cuda_op_moe_join(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
++void ggml_cuda_op_moe_ahead(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+ 
+ extern "C" bool ggml_backend_cuda_moe_sc_alloc(int device, int n_embd, void ** host, void ** host_dev, void ** dev_state);
+ extern "C" void ggml_backend_cuda_moe_sc_free(void * host, void * dev_state);
+ extern "C" int  ggml_backend_cuda_moe_sc_selftest(int device, int n);
++
++extern "C" void *          ggml_backend_cuda_moe_mover_new(int device, int max_pending, int n_words);
++extern "C" void            ggml_backend_cuda_moe_mover_free(void * handle);
++extern "C" const int32_t * ggml_backend_cuda_moe_mover_word(void * handle, int slot);
++extern "C" int64_t         ggml_backend_cuda_moe_mover_push(void * handle, void ** dst, const void ** src, const size_t * n, int count);
++extern "C" int64_t         ggml_backend_cuda_moe_mover_done(void * handle);
++extern "C" int64_t         ggml_backend_cuda_moe_mover_sync(void * handle);
++extern "C" bool            ggml_backend_cuda_moe_is_pinned(const void * ptr);
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index e9ea806..a5c0e03 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -1116,9 +1116,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
+     "MOE_ROWS",
+     "MOE_POST",
+     "MOE_JOIN",
++    "MOE_AHEAD",
+ };
+ 
+-static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
++static_assert(GGML_OP_COUNT == 105, "GGML_OP_COUNT != 105");
+ 
+ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
+     "none",
+@@ -1234,9 +1235,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
+     "moe_rows(x)",
+     "moe_post(x)",
+     "moe_join(x)",
++    "moe_ahead(x)",
+ };
+ 
+-static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
++static_assert(GGML_OP_COUNT == 105, "GGML_OP_COUNT != 105");
+ 
+ static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
+ 
+@@ -3445,6 +3447,42 @@ struct ggml_tensor * ggml_moe_join(
+     return result;
+ }
+ 
++struct ggml_tensor * ggml_moe_ahead(
++        struct ggml_context * ctx,
++        struct ggml_tensor * x,
++        struct ggml_tensor * w[2], struct ggml_tensor * r[2], struct ggml_tensor * tbl[2],
++        int32_t n_targets, int32_t layer, const int32_t target[2], const int32_t dummy[2], int32_t k,
++        void * host_dev, void * dev_state) {
++    GGML_ASSERT(n_targets == 1 || n_targets == 2);
++    GGML_ASSERT(k >= 1 && k <= 8);
++    GGML_ASSERT(layer >= 0 && layer < 128);
++    GGML_ASSERT(x->type == GGML_TYPE_F32 && ggml_is_contiguous(x) && ggml_nrows(x) == 1);
++    const int64_t n_embd = x->ne[0];
++    const int64_t n_expert = w[0]->ne[1];
++    GGML_ASSERT(n_expert <= 512);
++    for (int t = 0; t < n_targets; ++t) {
++        GGML_ASSERT(w[t]->type == GGML_TYPE_F32 && ggml_is_contiguous(w[t]));
++        GGML_ASSERT(w[t]->ne[0] == n_embd && w[t]->ne[1] == n_expert);
++        GGML_ASSERT(r[t]->type == GGML_TYPE_F32 && ggml_nelements(r[t]) == n_embd && ggml_is_contiguous(r[t]));
++        GGML_ASSERT(tbl[t]->type == GGML_TYPE_I32 && ggml_nelements(tbl[t]) == n_expert && ggml_is_contiguous(tbl[t]));
++        GGML_ASSERT(target[t] >= 0 && target[t] < 128);
++    }
++    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_expert, 2);
++    result->op = GGML_OP_MOE_AHEAD;
++    result->src[0] = x;
++    for (int t = 0; t < n_targets; ++t) {
++        result->src[1 + 3*t] = w[t];
++        result->src[2 + 3*t] = r[t];
++        result->src[3 + 3*t] = tbl[t];
++    }
++    int32_t params[11] = { layer, n_targets, target[0], n_targets > 1 ? target[1] : -1,
++                           dummy[0], n_targets > 1 ? dummy[1] : -1, k, 0, 0, 0, 0 };
++    memcpy(params + 7, &host_dev, sizeof(void *));
++    memcpy(params + 9, &dev_state, sizeof(void *));
++    ggml_set_op_params(result, params, sizeof(params));
++    return result;
++}
++
+ // ggml_out_prod
+ 
+ static inline bool ggml_can_out_prod(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 46ad4f7..cca2e72 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -2320,6 +2320,18 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+             cache_inp = ggml_moe_post(ctx0, mc_inp, sel, mc_slot_ids, il, mcache->n_slots,
+                                       mcache->sc_host_dev, mcache->sc_dev_state);
+             cb(cache_inp, "ffn_moe_sc_post", il);
++            if (mcache->ahead_n > 0) {
++                // predicts the next layers' routing and posts their missing
++                // experts so the host can stream them in before they are needed
++                ggml_tensor * w[2]   = { mcache->ahead_w[0],   mcache->ahead_w[1] };
++                ggml_tensor * r[2]   = { mcache->ahead_r[0],   mcache->ahead_r[1] };
++                ggml_tensor * tbl[2] = { mcache->ahead_tbl[0], mcache->ahead_tbl[1] };
++                ggml_tensor * ahead = ggml_moe_ahead(ctx0, cache_inp, w, r, tbl, mcache->ahead_n, il,
++                                                     mcache->ahead_il, mcache->ahead_dummy, mcache->ahead_k,
++                                                     mcache->sc_host_dev, mcache->sc_dev_state);
++                cb(ahead, "ffn_moe_sc_ahead", il);
++                ggml_build_forward_expand(gf, ahead);
++            }
+         } else if (fused_env && atoi(fused_env) != 0 && fused_limit <= 1e-6f) {
+             experts = ggml_moe_rows(ctx0, up_exps, mc_inp, selected_experts,
+                                     mcache->host_table, gate_exps, down_exps, mcache->n_slots);
+diff --git a/src/llama-moe-planner.h b/src/llama-moe-planner.h
+new file mode 100644
+index 0000000..ca494de
+--- /dev/null
++++ b/src/llama-moe-planner.h
+@@ -0,0 +1,134 @@
++#pragma once
++
++// Just-in-time expert streaming: which copy goes on the copy engine next.
++// Pure bookkeeping (no CUDA, no locks); the mover thread owns one and calls it
++// from one thread. Tested by moe-prefetch cpp/test-moe-planner.cpp.
++//
++// A job is one expert (its three slices, `bytes` in all) wanted by layer
++// `target` before `deadline_ns`. Jobs go out earliest-deadline-first in chunks
++// of at most chunk_bytes, so an urgent job waits at most one chunk behind a
++// less urgent one. A job that can no longer land before its deadline is dropped
++// rather than sent late, and so are the unfinished jobs of a layer that has
++// already read its table.
++
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++class moe_planner {
++public:
++    enum drop_reason { DROP_NONE = 0, DROP_LATE, DROP_POSTED };
++
++    struct job {
++        int         target;
++        int32_t     expert;
++        size_t      bytes;
++        size_t      sent = 0;
++        uint64_t    deadline_ns;
++        bool        dropped = false;
++        drop_reason drop = DROP_NONE;
++    };
++
++    struct chunk {
++        int    job;
++        size_t offset;
++        size_t len;
++        bool   last;     // the job's final chunk: its table word goes right after it
++    };
++
++    explicit moe_planner(size_t chunk_bytes) : chunk_bytes(chunk_bytes) {}
++
++    // token boundary: forget every job and every posted layer
++    void reset() {
++        jobs.clear();
++        posted_layers.clear();
++    }
++
++    // The new job's id, or -1 if (target, expert) already has a job or the
++    // target has already read its table. A repeat offer with an earlier
++    // deadline tightens the existing job (a d = 1 refresh of a d = 2 guess).
++    int offer(int target, int32_t expert, size_t bytes, uint64_t deadline_ns) {
++        for (int l : posted_layers) {
++            if (l == target) {
++                return -1;
++            }
++        }
++        for (auto & j : jobs) {
++            if (j.target == target && j.expert == expert) {
++                if (!j.dropped && deadline_ns < j.deadline_ns) {
++                    j.deadline_ns = deadline_ns;
++                }
++                n_dup++;
++                return -1;
++            }
++        }
++        job j;
++        j.target      = target;
++        j.expert      = expert;
++        j.bytes       = bytes;
++        j.deadline_ns = deadline_ns;
++        jobs.push_back(j);
++        n_offered++;
++        return (int) jobs.size() - 1;
++    }
++
++    // layer `target` has read its table: its unfinished jobs can no longer help
++    void posted(int target) {
++        posted_layers.push_back(target);
++        for (auto & j : jobs) {
++            if (j.target == target && !j.dropped && j.sent < j.bytes) {
++                j.dropped = true;
++                j.drop    = DROP_POSTED;
++                n_drop_posted++;
++            }
++        }
++    }
++
++    // The next chunk to copy. free_at_ns: when the copy engine will have
++    // finished what is already queued on it. hold_after >= 0: jobs whose
++    // target is beyond that layer wait (the CPU is computing a miss and a copy
++    // would slow it). False when nothing can go now.
++    bool next(uint64_t free_at_ns, double bytes_per_ns, int hold_after, chunk & out) {
++        int best = -1;
++        for (int i = 0; i < (int) jobs.size(); ++i) {
++            job & j = jobs[i];
++            if (j.dropped || j.sent >= j.bytes) {
++                continue;
++            }
++            const uint64_t finish = free_at_ns + (uint64_t) ((double) (j.bytes - j.sent) / bytes_per_ns);
++            if (finish > j.deadline_ns) {
++                j.dropped = true;
++                j.drop    = DROP_LATE;
++                n_drop_late++;
++                continue;
++            }
++            if (hold_after >= 0 && j.target > hold_after) {
++                continue;
++            }
++            if (best < 0 || j.deadline_ns < jobs[best].deadline_ns) {
++                best = i;
++            }
++        }
++        if (best < 0) {
++            return false;
++        }
++        job & j = jobs[best];
++        const size_t remaining = j.bytes - j.sent;
++        out.job    = best;
++        out.offset = j.sent;
++        out.len    = remaining < chunk_bytes ? remaining : chunk_bytes;
++        out.last   = out.len == remaining;
++        j.sent    += out.len;
++        return true;
++    }
++
++    const job & get(int id) const { return jobs[id]; }
++    size_t size() const { return jobs.size(); }
++
++    uint64_t n_offered = 0, n_dup = 0, n_drop_late = 0, n_drop_posted = 0;
++
++private:
++    size_t           chunk_bytes;
++    std::vector<job> jobs;
++    std::vector<int> posted_layers;
++};
+diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
+index 9f54da5..93c13b2 100644
+--- a/src/llama-moecache.cpp
++++ b/src/llama-moecache.cpp
+@@ -1,6 +1,7 @@
+ #include "llama-moecache.h"
+ 
+ #include "moe-predictor.h"
++#include "llama-moe-planner.h"
+ 
+ #include <cstdio>
+ #include <atomic>
+@@ -11,9 +12,11 @@
+ 
+ #include "ggml.h"
+ #include "ggml-backend.h"
++#include "ggml-cpu.h"
+ #include "ggml-moe-sidecar.h"
+ 
+ #include <cinttypes>
++#include <cmath>
+ #include <condition_variable>
+ #include <cstdlib>
+ #include <cstring>
+@@ -22,6 +25,7 @@
+ #include <mutex>
+ #include <string>
+ #include <algorithm>
++#include <array>
+ #include <thread>
+ #include <vector>
+ #if defined(__x86_64__) || defined(_M_X64)
+@@ -140,6 +144,14 @@ struct moe_sidecar {
+ 
+     uint64_t n_records = 0, n_miss_records = 0, serve_ns = 0;
+ 
++    // Persistent team (LLAMA_MOE_SIDECAR_TEAM=1): the serve thread is member 0
++    // of one OpenMP region per batch instead of starting a graph per miss.
++    // The record being computed is kept here between the team's next and done.
++    ggml_cpu_team * team = nullptr;
++    ggml_moe_sc_record cur{};
++    std::chrono::steady_clock::time_point cur_t0;
++    std::atomic<int> computing{-1};   // model layer whose misses are being computed, -1 when none
++
+     // In-token prediction (LLAMA_MOE_PREDICT_INTOKEN): a predicted expert is
+     // made visible to the GPU as soon as its copy lands. `intoken_step` marks
+     // when, so the layer's own record can say whether it arrived in time.
+@@ -148,9 +160,82 @@ struct moe_sidecar {
+     uint64_t n_intoken_published = 0, n_intoken_in_time = 0, n_intoken_late = 0, n_intoken_unused = 0;
+ };
+ 
++// Just-in-time streaming (LLAMA_MOE_STREAM=1). The graph's MOE_AHEAD posts,
++// for layers L+1 and L+2, the top experts their routers would pick from layer
++// L's input that are not in VRAM. The mover thread turns those into copies on
++// its own stream, earliest deadline first (llama-moe-planner.h), and after the
++// last byte of an expert writes the 4-byte table word that makes it visible,
++// on the same stream. Host bookkeeping catches up at the token boundary.
++struct moe_stream {
++    void * mover = nullptr;
++    void            (*mover_free)(void *) = nullptr;
++    const int32_t * (*mover_word)(void *, int) = nullptr;
++    int64_t         (*mover_push)(void *, void **, const void **, const size_t *, int) = nullptr;
++    int64_t         (*mover_done)(void *) = nullptr;
++    int64_t         (*mover_sync)(void *) = nullptr;
++
++    moe_planner planner{512 * 1024};
++    double   bytes_per_ns = 45.7;        // copy engine, host -> device
++    double   tau_ns       = 103000.0;    // GPU time per layer, running estimate
++    uint64_t margin_ns    = 5000;
++    int      per_layer    = 4;           // streamed experts per layer per token
++    int      reserve      = 2;           // extra free slots kept per layer at the boundary
++    size_t   max_outstanding = 1u << 20; // bytes queued on the copy stream at once
++
++    // one entry per planner job, same index; guarded by mc->mtx
++    struct sjob {
++        size_t   li;
++        int32_t  slot;
++        int      d;
++        int64_t  ticket  = 0;     // push that carried the last chunk and the table word
++        bool     landed  = false;
++        bool     in_time = false; // the GPU found it in its table
++        bool     late    = false; // routed, but the GPU read its table first
++    };
++    std::vector<sjob> jobs;
++    std::vector<std::vector<int32_t>> mark;   // [model layer][expert] = job + 1 this token; guarded by mc->mtx
++    std::vector<int32_t> n_this_token;        // [layer index]
++    std::vector<std::pair<int64_t, size_t>> outstanding;   // (ticket, bytes) not yet landed; mover only
++
++    // layers whose record the serve thread has consumed: serve -> mover, single producer/consumer
++    uint32_t posted_q[GGML_MOE_SC_RING];
++    std::atomic<uint32_t> posted_head{0};
++    uint32_t posted_tail = 0;
++
++    // when the mover received each layer's prediction, for the lead-time measurement (P11)
++    std::atomic<uint64_t> arrive_ns[GGML_MOE_SC_MAX_LAYERS];
++    std::atomic<uint32_t> arrive_gen[GGML_MOE_SC_MAX_LAYERS];
++
++    // the mover serves one generation per batch; step() waits for gen_done == gen_started
++    std::thread             thr;
++    std::mutex              m;
++    std::condition_variable cv, cv_done;
++    std::atomic<uint32_t>   gen_started{0};
++    uint32_t                gen_done = 0;
++    bool                    quit = false;
++    bool                    failed = false;
++    uint32_t                consumed = 0;   // lookahead records taken
++    uint32_t                last_layer = UINT32_MAX;
++    uint64_t                last_t_ns  = 0;
++
++    // map recording (LLAMA_MOE_MAP_RECORD with streaming): a boundary's frame is
++    // written one step late, with the next token's in-time streamed experts in it
++    std::vector<std::vector<int32_t>> rec_frame;
++    uint64_t rec_step = 0;
++    bool     rec_have = false;
++    std::vector<std::array<int32_t, 3>> rec_used;   // (layer index, slot, expert) adopted in time this step
++
++    // counters
++    uint64_t n_records = 0, n_offered = 0, n_landed = 0, n_in_time = 0, n_late = 0, n_unused = 0;
++    uint64_t n_drop_late = 0, n_drop_posted = 0, n_not_sent = 0, n_gpu_miss = 0, n_bytes = 0;
++    double   lead_sum[3] = { 0, 0, 0 };
++    uint64_t lead_n[3]   = { 0, 0, 0 };
++};
++
+ struct moe_cache {
+     int32_t n_slots     = 0;
+     moe_sidecar * sc    = nullptr;
++    moe_stream  * st    = nullptr;
+     int32_t max_inserts = 2;
+     bool freeze_cache = false;
+     bool deterministic = false;
+@@ -296,6 +381,16 @@ void map_header(moe_cache * mc, FILE * file, bool read) {
+     }
+ }
+ 
++void map_write(moe_cache * mc, uint64_t step, const std::vector<std::vector<int32_t>> & frame) {
++    fprintf(mc->map_record, "step %" PRIu64 "\n", step);
++    for (size_t li = 0; li < mc->layers.size(); ++li) {
++        fprintf(mc->map_record, "map %d", mc->layers[li].pub.il);
++        for (int32_t expert : frame[li]) fprintf(mc->map_record, " %d", expert);
++        fputc('\n', mc->map_record);
++    }
++    GGML_ASSERT(fflush(mc->map_record) == 0 && !ferror(mc->map_record));
++}
++
+ void map_frame(moe_cache * mc) {
+     if (mc->map_replay) {
+         uint64_t step = UINT64_MAX;
+@@ -338,17 +433,37 @@ void map_frame(moe_cache * mc) {
+         flush_tables(mc);
+     }
+     if (mc->map_record) {
+-        fprintf(mc->map_record, "step %" PRIu64 "\n", mc->n_steps);
++        std::vector<std::vector<int32_t>> frame;
+         for (const auto & ls : mc->layers) {
+             std::vector<int32_t> published(ls.pub.n_slots, -1);
+             for (int32_t expert = 0; expert < (int32_t) ls.expert_slot.size(); ++expert) {
+                 if (ls.expert_slot[expert] >= 0) published[ls.expert_slot[expert]] = expert;
+             }
+-            fprintf(mc->map_record, "map %d", ls.pub.il);
+-            for (int32_t expert : published) fprintf(mc->map_record, " %d", expert);
+-            fputc('\n', mc->map_record);
++            frame.push_back(std::move(published));
++        }
++        moe_stream * st = mc->st;
++        if (!st) {
++            map_write(mc, mc->n_steps, frame);
++            return;
++        }
++        // With streaming, the token after this boundary also sees the experts
++        // that streamed in before their layer read its table. The frame for
++        // this boundary is therefore written one step late, with the next
++        // token's in-time experts placed in the free slots they used, so a
++        // replay reproduces exactly what that token's GPU saw.
++        if (st->rec_have) {
++            for (const auto & u : st->rec_used) {
++                std::vector<int32_t> & f = st->rec_frame[u[0]];
++                GGML_ASSERT(f[u[1]] == -1);
++                GGML_ASSERT(std::find(f.begin(), f.end(), u[2]) == f.end());
++                f[u[1]] = u[2];
++            }
++            map_write(mc, st->rec_step, st->rec_frame);
+         }
+-        GGML_ASSERT(fflush(mc->map_record) == 0 && !ferror(mc->map_record));
++        st->rec_used.clear();
++        st->rec_frame = std::move(frame);
++        st->rec_step  = mc->n_steps;
++        st->rec_have  = true;
+     }
+ }
+ 
+@@ -373,6 +488,15 @@ int parse_layer_from_name(const char * name) {
+ // first and the demand path, which has ground truth rather than a guess, finds
+ // it empty. Measured: that inversion cost 4 tok/s and read exactly like "the
+ // predictor does not help".
++// Free slots a layer keeps at the boundary: the demand path's inserts, the
++// predictor's guesses, and the streaming reserve.
++int32_t pool_target_of(const moe_cache * mc) {
++    if (mc->freeze_cache) {
++        return 0;
++    }
++    return mc->max_inserts + (mc->have_pred ? mc->predict_top : 0) + (mc->st ? mc->st->reserve : 0);
++}
++
+ int issue_uploads(moe_cache * mc, size_t li, const int32_t * ids, size_t n, int budget,
+                   int min_keep = 0, bool spec = false, bool intoken = false) {
+     if (mc->freeze_cache) {
+@@ -388,6 +512,9 @@ int issue_uploads(moe_cache * mc, size_t li, const int32_t * ids, size_t n, int
+         if (ls.expert_slot[id] >= 0) {
+             continue;                       // already resident
+         }
++        if (mc->st && mc->st->mark[ls.pub.il][id]) {
++            continue;                       // being streamed in this token
++        }
+         if ((int) ls.free_slots.size() <= min_keep) {
+             break;      // reserved for the demand path, or simply nothing spare
+         }
+@@ -453,7 +580,14 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+             for (int64_t i = 0; i < n_ids; ++i) {
+                 const int32_t id = *(const int32_t *) ((const char *) ids->data + t * ids->nb[1] + i * ids->nb[0]);
+                 GGML_ASSERT(id >= 0 && id < (int32_t) ls->expert_slot.size());
+-                fprintf(mc->route_trace, " %d:%d", id, ls->expert_slot[id]);
++                int32_t slot = ls->expert_slot[id];
++                if (mc->st && n_tokens == 1) {
++                    // streaming changes the GPU's table mid-token: trace what the GPU used
++                    const auto * ctl = (const ggml_moe_sc_ctl *) mc->sc->host;
++                    const int32_t g = ctl->slots[il][i];
++                    slot = g == mc->sc->dummy[il] ? -1 : g;
++                }
++                fprintf(mc->route_trace, " %d:%d", id, slot);
+             }
+         }
+         fputc('\n', mc->route_trace);
+@@ -479,6 +613,9 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+                 ls->use_count[id]++;
+             }
+             const int32_t slot = ls->expert_slot[id];
++            if (slot < 0 && mc->st && mc->st->mark[il][id]) {
++                continue;   // streamed this token: hit or miss is the GPU's table's call (sidecar accounting)
++            }
+             if (slot >= 0) {
+                 ls->n_hit++;
+                 ls->slot_last_use[slot] = ++mc->clock;
+@@ -547,7 +684,7 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+         // not -- that is the locality the cache exists for. Issuing now gives
+         // the copy the rest of this token to complete, instead of the zero
+         // slack it gets when the job is only created at the step boundary.
+-        const int32_t pool_target = mc->freeze_cache ? 0 : mc->max_inserts + (mc->have_pred ? mc->predict_top : 0);
++        const int32_t pool_target = pool_target_of(mc);
+         // The slot an early upload takes was freed at an earlier step, so the
+         // expert it will end up displacing is whichever one the next top-up
+         // evicts: the current LRU resident. While the layer is still filling,
+@@ -878,9 +1015,189 @@ void publish_intoken(moe_cache * mc, const upload_job & j) {
+ 
+ static bool sc_debug();
+ 
+-void sidecar_serve(moe_cache * mc) {
++static uint64_t mono_ns() {
++    return (uint64_t) std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now().time_since_epoch()).count();
++}
++
++// serve thread: layer `il` has read its table this token. The mover stops
++// copying for it, and the time since each earlier layer's prediction arrived
++// is the lead that prediction had (P11).
++static void stream_posted(moe_cache * mc, int il) {
++    moe_stream * st = mc->st;
++    const uint32_t h = st->posted_head.load(std::memory_order_relaxed);
++    st->posted_q[h % GGML_MOE_SC_RING] = (uint32_t) il;
++    st->posted_head.store(h + 1, std::memory_order_release);
++    const uint64_t now = mono_ns();
++    const uint32_t gen = st->gen_started.load(std::memory_order_acquire);
++    for (int d = 1; d <= 2 && il - d >= 0; ++d) {
++        if (st->arrive_gen[il - d].load(std::memory_order_acquire) == gen) {
++            const uint64_t a = st->arrive_ns[il - d].load(std::memory_order_relaxed);
++            if (now > a) {
++                st->lead_sum[d] += (double) (now - a);
++                st->lead_n[d]++;
++            }
++        }
++    }
++}
++
++// serve thread, under mc->mtx: the GPU's slots say whether each streamed expert made it
++static void stream_account(moe_cache * mc, int il) {
++    moe_stream * st = mc->st;
+     moe_sidecar * sc = mc->sc;
++    const auto * ctl = (const ggml_moe_sc_ctl *) sc->host;
++    const int n_used = (int) sc->obs_ids[il]->ne[0];
++    for (int e = 0; e < n_used; ++e) {
++        const int32_t id   = ctl->ids[il][e];
++        const bool    miss = ctl->slots[il][e] == sc->dummy[il];
++        const int32_t m    = st->mark[il][id];
++        if (!m) {
++            st->n_gpu_miss += miss;
++            continue;
++        }
++        moe_stream::sjob & j = st->jobs[m - 1];
++        layer_state & ls = mc->layers[j.li];
++        if (!miss && !j.in_time) {
++            j.in_time = true;
++            st->n_in_time++;
++            ls.n_hit++;
++        } else if (miss && !j.in_time && !j.late) {
++            j.late = true;
++            st->n_late++;
++            st->n_gpu_miss++;
++            ls.n_miss++;
++        }
++    }
++}
++
++// --- serve thread: one record at a time --------------------------------------
++// The graph path and the team path share every step except the compute call.
++
++// the record at the head of the ring, if the GPU has posted one
++static bool sc_peek(moe_sidecar * sc, ggml_moe_sc_record & rec) {
+     auto * ctl = (ggml_moe_sc_ctl *) sc->host;
++    if (sc->consumed == __atomic_load_n(&ctl->head, __ATOMIC_ACQUIRE)) {
++        return false;
++    }
++    rec = ctl->ring[sc->consumed % GGML_MOE_SC_RING];
++    if (sc_debug()) fprintf(stderr, "sc-debug: record seq=%u layer=%u miss=%u\n", rec.seq, rec.layer, rec.miss);
++    return true;
++}
++
++static bool sc_valid(moe_cache * mc, const ggml_moe_sc_record & rec) {
++    moe_sidecar * sc = mc->sc;
++    const int il = (int) rec.layer;
++    if (rec.seq != sc->consumed || il >= (int) sc->graph.size() || !sc->graph[il]) {
++        fprintf(stderr, "moe-cache: sidecar channel error: record seq %u layer %d, expected seq %u\n",
++                rec.seq, il, sc->consumed);
++        sc->failed = true;
++        return false;
++    }
++    if (mc->st) {
++        stream_posted(mc, il);
++    }
++    return true;
++}
++
++// the experts the GPU posted as missed become the host op's misses
++static void sc_begin_miss(moe_sidecar * sc, const ggml_moe_sc_record & rec) {
++    const auto * ctl = (const ggml_moe_sc_ctl *) sc->host;
++    const int il = (int) rec.layer;
++    sc->cur    = rec;
++    sc->cur_t0 = std::chrono::steady_clock::now();
++    sc->computing.store(il, std::memory_order_relaxed);
++    if (sc_debug()) fprintf(stderr, "sc-debug: computing layer %d\n", il);
++    std::vector<int32_t> & mt = sc->miss_table[il];
++    const int n_used = (int) sc->obs_ids[il]->ne[0];
++    for (int e = 0; e < n_used; ++e) {
++        if (ctl->slots[il][e] == sc->dummy[il]) {
++            mt[ctl->ids[il][e]] = sc->dummy[il];
++        }
++    }
++}
++
++static void sc_end_miss(moe_sidecar * sc, bool ok) {
++    auto * ctl = (ggml_moe_sc_ctl *) sc->host;
++    const int il = (int) sc->cur.layer;
++    if (ok) {
++        __atomic_store_n(&ctl->resp[il], sc->cur.seq + 1, __ATOMIC_RELEASE);
++    } else {
++        fprintf(stderr, "moe-cache: sidecar CPU compute failed for layer %d\n", il);
++        sc->failed = true;
++    }
++    std::vector<int32_t> & mt = sc->miss_table[il];
++    const int n_used = (int) sc->obs_ids[il]->ne[0];
++    for (int e = 0; e < n_used; ++e) {
++        mt[ctl->ids[il][e]] = 0;
++    }
++    sc->serve_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now() - sc->cur_t0).count();
++    sc->n_miss_records++;
++    sc->computing.store(-1, std::memory_order_relaxed);
++}
++
++// accounting that needs the GPU's view of the layer, then consume the record
++static void sc_finish_record(moe_cache * mc, const ggml_moe_sc_record & rec, bool valid) {
++    moe_sidecar * sc = mc->sc;
++    const auto * ctl = (const ggml_moe_sc_ctl *) sc->host;
++    const int il = (int) rec.layer;
++    if (valid && sc->intoken) {
++        // did this layer's in-token predictions arrive before the GPU read its table?
++        std::lock_guard<std::mutex> lk(mc->mtx);
++        const int n_used = (int) sc->obs_ids[il]->ne[0];
++        for (int e = 0; e < n_used; ++e) {
++            const int32_t id = ctl->ids[il][e];
++            if (sc->intoken_step[il][id] == mc->n_steps + 1) {
++                if (ctl->slots[il][e] == sc->dummy[il]) {
++                    sc->n_intoken_late++;
++                } else {
++                    sc->n_intoken_in_time++;
++                }
++                sc->intoken_step[il][id] = 0;
++            }
++        }
++    }
++    if (valid && mc->st) {
++        std::lock_guard<std::mutex> lk(mc->mtx);
++        stream_account(mc, il);
++    }
++    sc->n_records++;
++    sc->consumed++;
++    sc->consumed_pub.store(sc->consumed, std::memory_order_release);
++}
++
++// team path: member 0 spins here between misses
++static ggml_tensor * sc_team_next(void * ud) {
++    moe_cache * mc = (moe_cache *) ud;
++    moe_sidecar * sc = mc->sc;
++    ggml_moe_sc_record rec;
++    while (sc->active.load(std::memory_order_acquire)) {
++        if (!sc_peek(sc, rec)) {
++            MOE_SC_PAUSE();
++            continue;
++        }
++        if (!sc_valid(mc, rec)) {
++            sc_finish_record(mc, rec, false);
++        } else if (rec.miss) {
++            sc_begin_miss(sc, rec);
++            return ggml_graph_node(sc->graph[rec.layer], 0);   // computes the rows and observes the routing
++        } else {
++            moe_obs_cb(sc->gate_name[rec.layer], sc->obs_ids[rec.layer], mc);
++            sc_finish_record(mc, rec, true);
++        }
++    }
++    return nullptr;
++}
++
++static void sc_team_done(void * ud, ggml_tensor * node) {
++    GGML_UNUSED(node);
++    moe_cache * mc = (moe_cache *) ud;
++    sc_end_miss(mc->sc, true);
++    sc_finish_record(mc, mc->sc->cur, true);
++}
++
++void sidecar_serve(moe_cache * mc) {
++    moe_sidecar * sc = mc->sc;
+     for (;;) {
+         {
+             std::unique_lock<std::mutex> lk(sc->m);
+@@ -889,68 +1206,352 @@ void sidecar_serve(moe_cache * mc) {
+                 return;
+             }
+         }
++        if (sc->team) {
++            ggml_cpu_team_run(sc->team, sc_team_next, sc_team_done, mc);
++            continue;
++        }
++        ggml_moe_sc_record rec;
+         while (sc->active.load(std::memory_order_acquire)) {
+-            const uint32_t head = __atomic_load_n(&ctl->head, __ATOMIC_ACQUIRE);
+-            if (sc->consumed == head) {
++            if (!sc_peek(sc, rec)) {
+                 MOE_SC_PAUSE();
+                 continue;
+             }
+-            const ggml_moe_sc_record rec = ctl->ring[sc->consumed % GGML_MOE_SC_RING];
+-            const int il = (int) rec.layer;
+-            if (sc_debug()) fprintf(stderr, "sc-debug: record seq=%u layer=%d miss=%u\n", rec.seq, il, rec.miss);
+-            if (rec.seq != sc->consumed || il >= (int) sc->graph.size() || !sc->graph[il]) {
+-                fprintf(stderr, "moe-cache: sidecar channel error: record seq %u layer %d, expected seq %u\n",
+-                        rec.seq, il, sc->consumed);
+-                sc->failed = true;
+-            } else if (rec.miss) {
+-                const auto t0 = std::chrono::steady_clock::now();
+-                if (sc_debug()) fprintf(stderr, "sc-debug: computing layer %d\n", il);
+-                std::vector<int32_t> & mt = sc->miss_table[il];
+-                const int n_used = (int) sc->obs_ids[il]->ne[0];
+-                for (int e = 0; e < n_used; ++e) {
+-                    if (ctl->slots[il][e] == sc->dummy[il]) {
+-                        mt[ctl->ids[il][e]] = sc->dummy[il];
+-                    }
+-                }
++            const bool valid = sc_valid(mc, rec);
++            if (valid && rec.miss) {
++                sc_begin_miss(sc, rec);
+                 // computes the missed rows and observes the routing, exactly as the fused CPU op does in-graph
+-                if (ggml_backend_graph_compute(sc->cpu, sc->graph[il]) != GGML_STATUS_SUCCESS) {
+-                    fprintf(stderr, "moe-cache: sidecar CPU compute failed for layer %d\n", il);
+-                    sc->failed = true;
+-                } else {
+-                    __atomic_store_n(&ctl->resp[il], rec.seq + 1, __ATOMIC_RELEASE);
+-                }
+-                for (int e = 0; e < n_used; ++e) {
+-                    mt[ctl->ids[il][e]] = 0;
+-                }
+-                sc->serve_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+-                    std::chrono::steady_clock::now() - t0).count();
+-                sc->n_miss_records++;
+-            } else {
+-                moe_obs_cb(sc->gate_name[il], sc->obs_ids[il], mc);
+-            }
+-            if (sc->intoken) {
+-                // did this layer's in-token predictions arrive before the GPU read its table?
+-                std::lock_guard<std::mutex> lk(mc->mtx);
+-                const int n_used = (int) sc->obs_ids[il]->ne[0];
+-                for (int e = 0; e < n_used; ++e) {
+-                    const int32_t id = ctl->ids[il][e];
+-                    if (sc->intoken_step[il][id] == mc->n_steps + 1) {
+-                        if (ctl->slots[il][e] == sc->dummy[il]) {
+-                            sc->n_intoken_late++;
+-                        } else {
+-                            sc->n_intoken_in_time++;
+-                        }
+-                        sc->intoken_step[il][id] = 0;
+-                    }
++                sc_end_miss(sc, ggml_backend_graph_compute(sc->cpu, sc->graph[rec.layer]) == GGML_STATUS_SUCCESS);
++            } else if (valid) {
++                moe_obs_cb(sc->gate_name[rec.layer], sc->obs_ids[rec.layer], mc);
++            }
++            sc_finish_record(mc, rec, valid);
++        }
++    }
++}
++
++// --- just-in-time streaming: the mover thread ---------------------------------
++
++static size_t expert_bytes(const layer_state & ls) {
++    return ls.pub.up_src->nb[2] + ls.pub.gate_src->nb[2] + ls.pub.down_src->nb[2];
++}
++
++// Bytes [off, off + len) of an expert taken as its slices up | gate | down,
++// as copy ranges into cache slot `slot`. At most three ranges.
++static int stream_ranges(const layer_state & ls, int32_t expert, int32_t slot, size_t off, size_t len,
++                         void ** dst, const void ** src, size_t * n) {
++    const ggml_tensor * srcs[3] = { ls.pub.up_src, ls.pub.gate_src, ls.pub.down_src };
++    ggml_tensor *       dsts[3] = { ls.pub.up_c,   ls.pub.gate_c,   ls.pub.down_c };
++    int k = 0;
++    size_t base = 0;
++    for (int i = 0; i < 3; ++i) {
++        const size_t sz = srcs[i]->nb[2];
++        const size_t a  = std::max(off, base);
++        const size_t b  = std::min(off + len, base + sz);
++        if (a < b) {
++            dst[k] = (char *) dsts[i]->data + (size_t) slot * dsts[i]->nb[2] + (a - base);
++            src[k] = (const char *) srcs[i]->data + (size_t) expert * sz + (a - base);
++            n[k]   = b - a;
++            ++k;
++        }
++        base += sz;
++    }
++    return k;
++}
++
++// caller holds mc->mtx
++static bool worker_has_job(moe_cache * mc, size_t li, int32_t id) {
++    std::lock_guard<std::mutex> wlk(mc->wmtx);
++    for (const auto & j : mc->todo) {
++        if (j.layer_idx == li && j.expert == id) return true;
++    }
++    for (const auto & j : mc->done) {
++        if (j.layer_idx == li && j.expert == id) return true;
++    }
++    return false;
++}
++
++// one lookahead record: candidates become planner jobs with a slot each
++static void stream_take(moe_cache * mc, const ggml_moe_sc_ahead & rec, uint32_t gen) {
++    moe_stream * st = mc->st;
++    const uint64_t now = mono_ns();
++    if (rec.layer < GGML_MOE_SC_MAX_LAYERS) {
++        st->arrive_ns[rec.layer].store(now, std::memory_order_relaxed);
++        st->arrive_gen[rec.layer].store(gen, std::memory_order_release);
++    }
++    // GPU time per layer, from consecutive layers of one token
++    if (st->last_layer != UINT32_MAX && rec.layer == st->last_layer + 1 && rec.t_ns > st->last_t_ns) {
++        const double dt = (double) (rec.t_ns - st->last_t_ns);
++        if (dt > 10000.0 && dt < 1000000.0) {
++            st->tau_ns = 0.9 * st->tau_ns + 0.1 * dt;
++        }
++    }
++    st->last_layer = rec.layer;
++    st->last_t_ns  = rec.t_ns;
++    st->n_records++;
++
++    std::lock_guard<std::mutex> lk(mc->mtx);
++    for (int t = 0; t < 2; ++t) {
++        const int T = rec.target[t];
++        const auto it = T >= 0 ? mc->by_il.find(T) : mc->by_il.end();
++        if (it == mc->by_il.end()) {
++            continue;
++        }
++        const size_t li = it->second;
++        layer_state & ls = mc->layers[li];
++        const int d = T - (int) rec.layer;
++        const uint64_t lead = (uint64_t) (d * st->tau_ns);
++        const uint64_t deadline = now + (lead > st->margin_ns ? lead - st->margin_ns : 0);
++        const size_t bytes = expert_bytes(ls);
++        for (uint32_t j = 0; j < rec.n[t] && j < GGML_MOE_SC_MAX_AHEAD; ++j) {
++            const int32_t e = rec.ids[t][j];
++            if (e < 0 || e >= (int32_t) ls.expert_slot.size() || ls.expert_slot[e] >= 0) {
++                continue;
++            }
++            if (st->mark[T][e]) {
++                st->planner.offer(T, e, bytes, deadline);   // already a job: may tighten its deadline
++                continue;
++            }
++            if (st->n_this_token[li] >= st->per_layer) {
++                continue;
++            }
++            if ((int) ls.free_slots.size() <= mc->max_inserts) {
++                st->n_not_sent++;                           // the demand path keeps its share
++                continue;
++            }
++            if (worker_has_job(mc, li, e)) {
++                continue;
++            }
++            const int id = st->planner.offer(T, e, bytes, deadline);
++            if (id < 0) {
++                continue;                                   // the layer has read its table already
++            }
++            GGML_ASSERT(id == (int) st->jobs.size());
++            moe_stream::sjob sj;
++            sj.li   = li;
++            sj.slot = ls.free_slots.back();
++            sj.d    = d;
++            ls.free_slots.pop_back();
++            ls.slot_in_flight[sj.slot] = true;
++            st->jobs.push_back(sj);
++            st->mark[T][e] = id + 1;
++            st->n_this_token[li]++;
++            st->n_offered++;
++        }
++    }
++}
++
++// copies whose event has fired: the expert and its table word are on the device
++static void stream_reap(moe_cache * mc, int64_t done) {
++    moe_stream * st = mc->st;
++    if (done < 0) {
++        fprintf(stderr, "moe-cache: stream copy queue error; streaming stops for this run\n");
++        st->failed = true;
++        return;
++    }
++    size_t k = 0;
++    while (k < st->outstanding.size() && st->outstanding[k].first <= done) {
++        ++k;
++    }
++    st->outstanding.erase(st->outstanding.begin(), st->outstanding.begin() + k);
++    std::lock_guard<std::mutex> lk(mc->mtx);
++    for (auto & j : st->jobs) {
++        if (j.ticket > 0 && j.ticket <= done && !j.landed) {
++            j.landed = true;
++            st->n_landed++;
++        }
++    }
++}
++
++// hand the copy engine the next chunks, up to max_outstanding bytes in flight
++static bool stream_issue(moe_cache * mc) {
++    moe_stream * st = mc->st;
++    size_t queued = 0;
++    for (const auto & o : st->outstanding) {
++        queued += o.second;
++    }
++    bool any = false;
++    while (queued < st->max_outstanding && st->outstanding.size() < 32) {
++        // while the CPU computes a miss, a copy for a layer further out would slow it
++        const int comp = mc->sc->computing.load(std::memory_order_relaxed);
++        const uint64_t free_at = mono_ns() + (uint64_t) ((double) queued / st->bytes_per_ns);
++        moe_planner::chunk c;
++        if (!st->planner.next(free_at, st->bytes_per_ns, comp >= 0 ? comp + 1 : -1, c)) {
++            break;
++        }
++        const moe_planner::job & pj = st->planner.get(c.job);
++        const moe_stream::sjob & sj = st->jobs[c.job];   // li and slot never change; only this thread appends
++        const layer_state & ls = mc->layers[sj.li];
++        void *       dst[4];
++        const void * src[4];
++        size_t       n[4];
++        int k = stream_ranges(ls, pj.expert, sj.slot, c.offset, c.len, dst, src, n);
++        if (c.last) {
++            // the table word, ordered after the expert's last byte on the same stream
++            dst[k] = (char *) ls.pub.dev_table->data + (size_t) pj.expert * sizeof(int32_t);
++            src[k] = st->mover_word(st->mover, sj.slot);
++            n[k]   = sizeof(int32_t);
++            GGML_ASSERT(src[k]);
++            ++k;
++        }
++        const int64_t ticket = st->mover_push(st->mover, dst, src, n, k);
++        if (ticket <= 0) {
++            fprintf(stderr, "moe-cache: stream copy push failed (%" PRId64 "); streaming stops for this run\n", ticket);
++            st->failed = true;
++            return any;
++        }
++        st->outstanding.push_back({ ticket, c.len });
++        queued += c.len;
++        st->n_bytes += c.len;
++        if (c.last) {
++            std::lock_guard<std::mutex> lk(mc->mtx);
++            st->jobs[c.job].ticket = ticket;
++        }
++        any = true;
++    }
++    return any;
++}
++
++static void stream_loop(moe_cache * mc) {
++    moe_stream  * st  = mc->st;
++    moe_sidecar * sc  = mc->sc;
++    const auto  * ctl = (const ggml_moe_sc_ctl *) sc->host;
++    int64_t last_done = 0;
++    for (;;) {
++        {
++            std::unique_lock<std::mutex> lk(st->m);
++            st->cv.wait(lk, [st]() { return st->quit || st->gen_started.load() != st->gen_done; });
++            if (st->quit) {
++                return;
++            }
++        }
++        const uint32_t gen = st->gen_started.load(std::memory_order_acquire);
++        while (sc->active.load(std::memory_order_acquire) && !st->failed) {
++            bool progress = false;
++            // layers that have read their tables first, so no job is offered for one of them
++            const uint32_t ph = st->posted_head.load(std::memory_order_acquire);
++            while (st->posted_tail != ph) {
++                st->planner.posted((int) st->posted_q[st->posted_tail % GGML_MOE_SC_RING]);
++                st->posted_tail++;
++                progress = true;
++            }
++            const uint32_t ah = __atomic_load_n(&ctl->ahead_head, __ATOMIC_ACQUIRE);
++            while (st->consumed != ah) {
++                const ggml_moe_sc_ahead rec = ctl->ahead[st->consumed % GGML_MOE_SC_RING];
++                if (rec.seq != st->consumed) {
++                    fprintf(stderr, "moe-cache: stream channel error: record seq %u, expected %u; streaming stops\n",
++                            rec.seq, st->consumed);
++                    st->failed = true;
++                    break;
+                 }
++                stream_take(mc, rec, gen);
++                st->consumed++;
++                progress = true;
++            }
++            const int64_t done = st->mover_done(st->mover);
++            if (done != last_done) {
++                stream_reap(mc, done);
++                last_done = done;
++                progress = true;
++            }
++            if (!st->failed) {
++                progress |= stream_issue(mc);
++            }
++            if (!progress) {
++                MOE_SC_PAUSE();
+             }
+-            sc->n_records++;
+-            sc->consumed++;
+-            sc->consumed_pub.store(sc->consumed, std::memory_order_release);
+         }
++        // The graph is over. Whatever landed stays; the rest is given back at the boundary.
++        const int64_t done = st->mover_sync(st->mover);
++        stream_reap(mc, done);
++        last_done = done;
++        st->outstanding.clear();
++        st->consumed    = __atomic_load_n(&ctl->ahead_head, __ATOMIC_ACQUIRE);
++        st->posted_tail = st->posted_head.load(std::memory_order_acquire);
++        st->last_layer  = UINT32_MAX;
++        {
++            std::lock_guard<std::mutex> lk(st->m);
++            st->gen_done = st->gen_started.load();
++        }
++        st->cv_done.notify_all();
++    }
++}
++
++// step(): the mover has finished every batch started so far, so nothing is in flight
++static void stream_quiesce(moe_cache * mc) {
++    moe_stream * st = mc->st;
++    std::unique_lock<std::mutex> lk(st->m);
++    if (!st->cv_done.wait_for(lk, std::chrono::seconds(2), [st]() { return st->gen_done == st->gen_started.load(); })) {
++        // adopting jobs while copies may still run could publish a torn expert
++        GGML_ABORT("moe-cache: stream mover did not stop within 2 s");
+     }
+ }
+ 
++// step(), mover idle, caller holds mc->mtx: landed experts join the cache, the
++// slots of the others go back to the pool (no table word was written for them)
++static void stream_adopt(moe_cache * mc) {
++    moe_stream * st = mc->st;
++    st->rec_used.clear();
++    for (size_t k = 0; k < st->jobs.size(); ++k) {
++        const moe_stream::sjob & sj = st->jobs[k];
++        const moe_planner::job & pj = st->planner.get((int) k);
++        layer_state & ls = mc->layers[sj.li];
++        const int32_t e = pj.expert;
++        ls.slot_in_flight[sj.slot] = false;
++        if (sj.in_time) {
++            st->rec_used.push_back({ (int32_t) sj.li, sj.slot, e });
++        }
++        if (sj.landed && ls.expert_slot[e] >= 0) {
++            // A worker copy of the same expert was published just now (it was
++            // between the worker's queues when the job was offered). Keep the
++            // worker's slot; this layer's table is rewritten from the mirrors
++            // at this step's flush, so the streamed slot is unreferenced again.
++            ls.free_slots.push_back(sj.slot);
++            st->n_unused += !sj.in_time && !sj.late;
++        } else if (sj.landed) {
++            ls.slot_expert[sj.slot] = e;
++            ls.expert_slot[e]       = sj.slot;
++            // routed: real demand, recent; not routed: the first to go
++            ls.slot_last_use[sj.slot] = sj.in_time || sj.late ? ++mc->clock : 1;
++            set_table_entry(mc, ls, e, sj.slot);   // the device word is already there; the mirrors follow
++            mc->n_published++;
++            if (!sj.in_time && !sj.late) {
++                st->n_unused++;
++            }
++        } else {
++            ls.free_slots.push_back(sj.slot);
++        }
++        st->mark[ls.pub.il][e] = 0;
++    }
++    st->n_drop_late   = st->planner.n_drop_late;
++    st->n_drop_posted = st->planner.n_drop_posted;
++    st->jobs.clear();
++    st->planner.reset();
++    std::fill(st->n_this_token.begin(), st->n_this_token.end(), 0);
++}
++
++static void stream_report(moe_cache * mc, const char * when) {
++    moe_stream * st = mc->st;
++    const double steps = (double) std::max<uint64_t>(mc->n_steps, 1);
++    const uint64_t routed = st->n_in_time + st->n_late;
++    fprintf(stderr, "moe-cache: stream %s: per token offered %.2f, landed %.2f, in time %.2f, late %.2f, unused %.2f, "
++            "dropped late %.2f, dropped posted %.2f, no slot %.2f, misses left %.2f, %.1f MiB copied\n",
++            when, st->n_offered / steps, st->n_landed / steps, st->n_in_time / steps, st->n_late / steps,
++            st->n_unused / steps, st->n_drop_late / steps, st->n_drop_posted / steps, st->n_not_sent / steps,
++            st->n_gpu_miss / steps, st->n_bytes / 1048576.0 / steps);
++    fprintf(stderr, "moe-cache: stream %s: served from VRAM %.1f%% of would-be misses, %.1f%% of landed copies used in time, "
++            "%" PRIu64 " routed; lead d1 %.1f us (%" PRIu64 "), d2 %.1f us (%" PRIu64 "); tau %.1f us%s\n",
++            when, st->n_in_time + st->n_gpu_miss ? 100.0 * st->n_in_time / (st->n_in_time + st->n_gpu_miss) : 0.0,
++            st->n_landed ? 100.0 * st->n_in_time / st->n_landed : 0.0, routed,
++            st->lead_n[1] ? st->lead_sum[1] / st->lead_n[1] / 1000.0 : 0.0, st->lead_n[1],
++            st->lead_n[2] ? st->lead_sum[2] / st->lead_n[2] / 1000.0 : 0.0, st->lead_n[2],
++            st->tau_ns / 1000.0, st->failed ? " (FAILED, stopped)" : "");
++    fprintf(stderr, "moe-cache: stream %s totals: steps=%" PRIu64 " offered=%" PRIu64 " landed=%" PRIu64
++            " in_time=%" PRIu64 " late=%" PRIu64 " unused=%" PRIu64 " gpu_miss=%" PRIu64 " failed=%d\n",
++            when, mc->n_steps, st->n_offered, st->n_landed, st->n_in_time, st->n_late, st->n_unused,
++            st->n_gpu_miss, (int) st->failed);
++    fflush(stderr);
++}
++
+ void sidecar_init(moe_cache * mc, int n_used) {
+     ggml_backend_reg_t reg = ggml_backend_reg_by_name("CUDA");
+     auto sc_alloc = reg ? (bool (*)(int, int, void **, void **, void **))
+@@ -987,13 +1588,13 @@ void sidecar_init(moe_cache * mc, int n_used) {
+     }
+     sc->cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+     GGML_ASSERT(sc->cpu);
++    int n_threads = 8;
++    if (const char * e = getenv("LLAMA_MOE_SIDECAR_THREADS")) {
++        n_threads = std::max(1, atoi(e));
++    }
+     {
+         ggml_backend_reg_t cpu_reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(sc->cpu));
+         auto set_threads = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_set_n_threads");
+-        int n_threads = 8;
+-        if (const char * e = getenv("LLAMA_MOE_SIDECAR_THREADS")) {
+-            n_threads = std::max(1, atoi(e));
+-        }
+         if (set_threads) {
+             set_threads(sc->cpu, n_threads);
+         }
+@@ -1030,6 +1631,25 @@ void sidecar_init(moe_cache * mc, int n_used) {
+         sc->obs_ids[il]   = ids;
+         sc->gate_name[il] = p.gate_src->name;
+     }
++    if (const char * e = getenv("LLAMA_MOE_SIDECAR_TEAM"); e && atoi(e) != 0) {
++        size_t work = 0;
++        for (ggml_cgraph * gf : sc->graph) {
++            if (gf) {
++                work = std::max(work, ggml_graph_plan(gf, n_threads, nullptr).work_size);
++            }
++        }
++        int pin = -1;
++        if (const char * p = getenv("LLAMA_MOE_SIDECAR_PIN")) {
++            pin = atoi(p);
++        }
++        sc->team = ggml_cpu_team_new(n_threads, work, pin);
++        if (sc->team) {
++            fprintf(stderr, "moe-cache: sidecar team ENABLED (%d threads, %.1f KiB work, %s)\n", n_threads,
++                    work / 1024.0, pin >= 0 ? "pinned" : "unpinned");
++        } else {
++            fprintf(stderr, "moe-cache: sidecar team NOT enabled (ggml-cpu built without OpenMP); one graph per miss\n");
++        }
++    }
+     mc->sc = sc;
+     for (auto & ls : mc->layers) {
+         ls.pub.sc_host_dev  = sc->host_dev;
+@@ -1051,6 +1671,142 @@ void sidecar_init(moe_cache * mc, int n_used) {
+             n_test, n_test, mc->layers.size(), ggml_moe_sc_host_bytes(n_embd) / 1048576.0);
+ }
+ 
++// LLAMA_MOE_STREAM=1: wire MOE_AHEAD into every cached layer that has a cached
++// layer one or two above it, and start the mover.
++static void stream_init(moe_cache * mc, const llama_model & model) {
++    moe_sidecar * sc = mc->sc;
++    if (!sc || !mc->early_issue || !mc->batch_tables || mc->deterministic || mc->map_replay || mc->freeze_cache) {
++        fprintf(stderr, "moe-cache: streaming NOT enabled: needs the sidecar, LLAMA_MOE_EARLY_ISSUE=1 and "
++                "LLAMA_MOE_BATCH_TABLES=1, and no replay/freeze/deterministic mode\n");
++        return;
++    }
++    ggml_backend_reg_t reg = ggml_backend_reg_by_name("CUDA");
++    auto get = [reg](const char * name) { return reg ? ggml_backend_reg_get_proc_address(reg, name) : nullptr; };
++    auto mover_new = (void * (*)(int, int, int)) get("ggml_backend_cuda_moe_mover_new");
++    auto is_pinned = (bool (*)(const void *)) get("ggml_backend_cuda_moe_is_pinned");
++    auto * st = new moe_stream();
++    st->mover_free = (void (*)(void *)) get("ggml_backend_cuda_moe_mover_free");
++    st->mover_word = (const int32_t * (*)(void *, int)) get("ggml_backend_cuda_moe_mover_word");
++    st->mover_push = (int64_t (*)(void *, void **, const void **, const size_t *, int)) get("ggml_backend_cuda_moe_mover_push");
++    st->mover_done = (int64_t (*)(void *)) get("ggml_backend_cuda_moe_mover_done");
++    st->mover_sync = (int64_t (*)(void *)) get("ggml_backend_cuda_moe_mover_sync");
++    if (!mover_new || !is_pinned || !st->mover_free || !st->mover_word || !st->mover_push || !st->mover_done || !st->mover_sync) {
++        fprintf(stderr, "moe-cache: streaming NOT enabled (CUDA backend has no copy-queue entry points)\n");
++        delete st;
++        return;
++    }
++    int32_t max_slots = 0;
++    for (const auto & ls : mc->layers) {
++        max_slots = std::max(max_slots, ls.pub.n_slots);
++    }
++    st->mover = mover_new(0, 64, max_slots + 1);
++    if (!st->mover) {
++        fprintf(stderr, "moe-cache: streaming NOT enabled (copy queue allocation failed)\n");
++        delete st;
++        return;
++    }
++    if (const char * e = getenv("LLAMA_MOE_STREAM_PER_LAYER")) { st->per_layer = std::max(1, atoi(e)); }
++    if (const char * e = getenv("LLAMA_MOE_STREAM_RESERVE"))   { st->reserve   = std::max(0, atoi(e)); }
++    if (const char * e = getenv("LLAMA_MOE_STREAM_GBPS"))      { st->bytes_per_ns = std::max(1.0, atof(e)); }
++    int k = 8;
++    if (const char * e = getenv("LLAMA_MOE_STREAM_TOPK"))      { k = std::min(8, std::max(1, atoi(e))); }
++
++    st->mark.assign(GGML_MOE_SC_MAX_LAYERS, {});
++    for (const auto & ls : mc->layers) {
++        st->mark[ls.pub.il].assign(ls.expert_slot.size(), 0);
++    }
++    st->n_this_token.assign(mc->layers.size(), 0);
++    for (int i = 0; i < GGML_MOE_SC_MAX_LAYERS; ++i) {
++        st->arrive_ns[i].store(0);
++        st->arrive_gen[i].store(UINT32_MAX);
++    }
++
++    // r = g_T / g_L, so W_T . (x_L * r) == W_T . (rmsnorm(residual_L) * g_T): layer T's
++    // router applied to layer L's residual (spec section 4, probe P10)
++    struct pair { layer_state * ls; int t; int T; const llama_layer * lT; std::vector<float> r; };
++    std::vector<pair> pairs;
++    int n_skipped = 0;
++    for (auto & ls : mc->layers) {
++        const int il = ls.pub.il;
++        const llama_layer & lL = model.layers[il];
++        for (int d = 1; d <= 2; ++d) {
++            const int T = il + d;
++            const auto it = mc->by_il.find(T);
++            if (it == mc->by_il.end()) {
++                continue;
++            }
++            const llama_layer & lT = model.layers[T];
++            const layer_state & lsT = mc->layers[it->second];
++            const ggml_tensor * w = lT.ffn_gate_inp;
++            const int64_t n_embd = ls.pub.up_src->ne[0];
++            if (!lL.ffn_norm || !lT.ffn_norm || !w || w->type != GGML_TYPE_F32 || !ggml_is_contiguous(w) ||
++                w->ne[0] != n_embd || w->ne[1] != (int64_t) lsT.expert_slot.size() ||
++                lL.ffn_norm->type != GGML_TYPE_F32 || lT.ffn_norm->type != GGML_TYPE_F32 ||
++                ggml_nelements(lL.ffn_norm) != n_embd || ggml_nelements(lT.ffn_norm) != n_embd ||
++                ggml_backend_buffer_get_type(lsT.pub.dev_table->buffer) != ggml_backend_buffer_get_type(ls.pub.dev_table->buffer)) {
++                n_skipped++;
++                continue;
++            }
++            std::vector<float> gL(n_embd), gT(n_embd);
++            ggml_backend_tensor_get(lL.ffn_norm, gL.data(), 0, n_embd * sizeof(float));
++            ggml_backend_tensor_get(lT.ffn_norm, gT.data(), 0, n_embd * sizeof(float));
++            bool ok = true;
++            for (int64_t i = 0; i < n_embd && ok; ++i) {
++                ok = std::fabs(gL[i]) >= 1e-12f;
++                gT[i] /= gL[i];
++            }
++            if (!ok) {
++                n_skipped++;    // a zero norm weight: the ratio does not exist
++                continue;
++            }
++            pairs.push_back({ &ls, ls.pub.ahead_n++, T, &lT, std::move(gT) });
++        }
++    }
++    if (pairs.empty()) {
++        fprintf(stderr, "moe-cache: streaming NOT enabled (no layer pair has an F32 router and RMS-norm weights)\n");
++        st->mover_free(st->mover);
++        delete st;
++        for (auto & ls : mc->layers) {
++            ls.pub.ahead_n = 0;
++        }
++        return;
++    }
++    ggml_init_params ip = { ggml_tensor_overhead() * (pairs.size() + 1), nullptr, true };
++    ggml_context * ctx = ggml_init(ip);
++    GGML_ASSERT(ctx);
++    for (auto & p : pairs) {
++        layer_state & ls = *p.ls;
++        ggml_tensor * r = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t) p.r.size());
++        ggml_format_name(r, "moe_ahead_r.%d.%d", ls.pub.il, p.T);
++        const layer_state & lsT = mc->layers[mc->by_il[p.T]];
++        ls.pub.ahead_k        = k;
++        ls.pub.ahead_il[p.t]  = p.T;
++        ls.pub.ahead_dummy[p.t] = lsT.pub.n_slots;
++        ls.pub.ahead_w[p.t]   = p.lT->ffn_gate_inp;
++        ls.pub.ahead_r[p.t]   = r;
++        ls.pub.ahead_tbl[p.t] = lsT.pub.dev_table;
++    }
++    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(
++        ctx, ggml_backend_buffer_get_type(pairs[0].ls->pub.dev_table->buffer));
++    GGML_ASSERT(buf);
++    mc->ctxs.push_back(ctx);
++    mc->bufs.push_back(buf);
++    for (auto & p : pairs) {
++        ggml_backend_tensor_set(p.ls->pub.ahead_r[p.t], p.r.data(), 0, p.r.size() * sizeof(float));
++    }
++
++    const bool pinned = is_pinned(mc->layers[0].pub.up_src->data);
++    if (sc->intoken) {
++        sc->intoken = false;
++        fprintf(stderr, "moe-cache: in-token prediction OFF: streaming replaces it\n");
++    }
++    mc->st = st;
++    st->thr = std::thread(stream_loop, mc);
++    fprintf(stderr, "moe-cache: streaming ENABLED: %zu layer pairs (%d skipped), top %d, %d per layer per token, "
++            "reserve %d, %.1f GB/s, host weights %s\n", pairs.size(), n_skipped, k, st->per_layer, st->reserve,
++            st->bytes_per_ns, pinned ? "pinned" : "NOT pinned (copies will be slow)");
++}
++
+ // Stop the upload workers and the sidecar thread before the model and the
+ // backends go away. A worker still copying an expert when the context is
+ // destroyed reads freed host weights and aborts the process; that race
+@@ -1092,6 +1848,25 @@ void llama_moe_cache_shutdown(const void * owner) {
+         if (mc->sc->thr.joinable()) {
+             mc->sc->thr.join();
+         }
++        ggml_cpu_team_free(mc->sc->team);
++        mc->sc->team = nullptr;
++    }
++    if (moe_stream * st = mc->st) {
++        {
++            std::lock_guard<std::mutex> lk(st->m);
++            st->quit = true;
++        }
++        st->cv.notify_all();
++        if (st->thr.joinable()) {
++            st->thr.join();
++        }
++        st->mover_free(st->mover);
++        st->mover = nullptr;
++        stream_report(mc, "final");
++        if (mc->map_record && st->rec_have) {
++            map_write(mc, st->rec_step, st->rec_frame);   // the last boundary: no token followed it
++            st->rec_have = false;
++        }
+     }
+ }
+ 
+@@ -1592,6 +2367,9 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+         if (const char * e = getenv("LLAMA_MOE_SIDECAR"); e && atoi(e) != 0) {
+             sidecar_init(mc, (int) model.hparams.n_expert_used);
+         }
++        if (const char * e = getenv("LLAMA_MOE_STREAM"); e && atoi(e) != 0) {
++            stream_init(mc, model);
++        }
+         fflush(stderr);
+ 
+         ggml_set_moe_obs_callback(moe_obs_cb, mc);
+@@ -1643,6 +2421,13 @@ void llama_moe_cache_begin_ubatch(uint32_t n_tokens) {
+         mc->sc->active.store(true, std::memory_order_release);
+     }
+     mc->sc->cv.notify_one();
++    if (mc->st) {
++        {
++            std::lock_guard<std::mutex> lk(mc->st->m);
++            mc->st->gen_started.fetch_add(1);
++        }
++        mc->st->cv.notify_one();
++    }
+ }
+ 
+ bool llama_moe_cache_sidecar_ok() {
+@@ -1688,6 +2473,9 @@ void llama_moe_cache_step() {
+     if (mc->sc) {
+         sidecar_drain(mc->sc);
+     }
++    if (mc->st) {
++        stream_quiesce(mc);
++    }
+ 
+     if (mc->deterministic) {
+         const auto start = std::chrono::steady_clock::now();
+@@ -1727,6 +2515,10 @@ void llama_moe_cache_step() {
+             mc->n_published++;
+         }
+         mc->done.clear();
++        if (mc->st) {
++            // after the uploads, so an expert a worker also copied is kept once
++            stream_adopt(mc);
++        }
+     }
+ 
+     std::lock_guard<std::mutex> lock(mc->mtx);
+@@ -1809,7 +2601,7 @@ void llama_moe_cache_step() {
+         // table write, and therefore has to happen exactly here and nowhere
+         // else.
+         ls.pending.clear();
+-        const int32_t pool_target = mc->freeze_cache ? 0 : mc->max_inserts + (mc->have_pred ? mc->predict_top : 0);
++        const int32_t pool_target = pool_target_of(mc);
+         std::vector<float> esc;
+         const bool use_model = evict_scores(mc, ls, esc);
+         static int evict_dbg = -1;
+@@ -1900,6 +2692,9 @@ void llama_moe_cache_step() {
+                     "%" PRIu64 " routed but too late, rest not routed in their token\n",
+                     mc->sc->n_intoken_published, mc->sc->n_intoken_in_time, mc->sc->n_intoken_late);
+         }
++        if (mc->st) {
++            stream_report(mc, "running");
++        }
+     }
+     if (mc->deterministic && mc->n_steps % 512 == 0) {
+         fprintf(stderr, "moe-cache: publication wait %.2f us/step\n",
+diff --git a/src/llama-moecache.h b/src/llama-moecache.h
+index 03041bf..e4e2544 100644
+--- a/src/llama-moecache.h
++++ b/src/llama-moecache.h
+@@ -63,6 +63,18 @@ struct llama_moe_cache_layer {
+     // off, and then the graph is the fused/CPU one.
+     void * sc_host_dev  = nullptr;
+     void * sc_dev_state = nullptr;
++
++    // Just-in-time streaming (LLAMA_MOE_STREAM=1): after MOE_POST the graph
++    // runs MOE_AHEAD, which applies the routers of these later layers to this
++    // layer's input and posts their non-resident top experts. ahead_n == 0
++    // when off, and then the graph is the sidecar one.
++    int32_t       ahead_n        = 0;
++    int32_t       ahead_k        = 8;
++    int32_t       ahead_il[2]    = { -1, -1 };
++    int32_t       ahead_dummy[2] = { 0, 0 };
++    ggml_tensor * ahead_w[2]     = { nullptr, nullptr };   // target's router, F32 [n_embd, n_expert]
++    ggml_tensor * ahead_r[2]     = { nullptr, nullptr };   // g_target / g_this, F32 [n_embd], device
++    ggml_tensor * ahead_tbl[2]   = { nullptr, nullptr };   // target's dev_table
+ };
+ 
+ // build the cache for every host-resident expert layer of the model.

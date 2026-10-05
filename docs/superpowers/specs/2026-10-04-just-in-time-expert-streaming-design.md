@@ -1,7 +1,7 @@
 # Just-in-time expert streaming: send the expert before the GPU asks for it
 
-**Status: design, for review. 2026-10-04. Nothing in sections 5 to 8 is
-implemented.** Numbers are labelled *measured* (the engine), *probe* (a
+**Status: approved 2026-10-04. Steps 1 and 3 (and step 2's timestamps) are
+built as patch 0010, not yet measured; see `docs/STREAMING-IMPLEMENTATION.md`.** Numbers are labelled *measured* (the engine), *probe* (a
 standalone program), *replay* (traces through a model of the engine) or
 *estimate*. Machine and model as in
 `2026-10-01-graph-resident-decode-design.md`: RTX 5070 12 GB at 175 W, Ryzen

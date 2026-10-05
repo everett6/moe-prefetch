@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build an isolated engine with patches 0008 (fused CPU rows) and 0009 (sidecar);
+# Build an isolated engine with patches 0008 (fused CPU rows), 0009 (sidecar) and
+# 0010 (persistent CPU team, just-in-time expert streaming);
 # existing llama.cpp installations are untouched.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -9,13 +10,14 @@ if [ ! -d "$target_engine/.git" ]; then
     git clone --no-hardlinks "$source_engine" "$target_engine"
     git -C "$target_engine" apply "$PWD/patches/0008-fused-cpu-moe-rows.patch"
     git -C "$target_engine" apply "$PWD/patches/0009-moe-sidecar.patch"
+    git -C "$target_engine" apply "$PWD/patches/0010-team-and-streaming.patch"
 fi
 cuda_root=${CUDA_HOME:-$HOME/miniconda3/envs/cudabuild}
 cmake -S "$target_engine" -B "$target_engine/build" \
     -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DGGML_CUDA=ON \
     -DCMAKE_CUDA_COMPILER="$cuda_root/bin/nvcc" -DCMAKE_CUDA_ARCHITECTURES=120 \
     -DGGML_CUDA_NCCL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
-    -DLLAMA_BUILD_TOOLS=ON -DLLAMA_CURL=OFF
+    -DLLAMA_BUILD_TOOLS=ON -DLLAMA_CURL=OFF -DLLAMA_USE_PREBUILT_UI=OFF
 cmake --build "$target_engine/build" --target llama-server -j"${BUILD_JOBS:-4}"
 mkdir -p cpp/build
 g++ -O2 -std=c++17 cpp/test-moe-rows.cpp -I"$target_engine/ggml/include" \
@@ -31,3 +33,11 @@ g++ -O2 -std=c++17 cpp/moe-logits.cpp -I"$target_engine/common" \
 g++ -O2 -std=c++17 cpp/test-moe-sidecar.cpp -I"$target_engine/ggml/include" \
     -L"$target_engine/build/bin" -lggml -lggml-base \
     -Wl,-rpath,"$target_engine/build/bin" -lpthread -o cpp/build/test-moe-sidecar
+
+# CPU-only checks of 0010: the persistent team against the graph path, and the streaming planner
+g++ -O2 -std=c++17 cpp/test-moe-team.cpp -I"$target_engine/ggml/include" \
+    -L"$target_engine/build/bin" -lggml-cpu -lggml-base \
+    -Wl,-rpath,"$target_engine/build/bin" -o cpp/build/test-moe-team
+OMP_WAIT_POLICY=active cpp/build/test-moe-team
+g++ -O2 -std=c++17 cpp/test-moe-planner.cpp -I"$target_engine/src" -o cpp/build/test-moe-planner
+cpp/build/test-moe-planner

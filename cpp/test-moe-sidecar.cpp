@@ -3,6 +3,10 @@
 // Graph: post = MOE_POST(x) ; chain = cached + repeat(post) ; out = MOE_JOIN(chain)
 // For every run the output must equal, bit for bit, f(seq, e, i) + chain for a
 // routed expert whose slot is the dummy slot and chain for every other one.
+//
+// Streaming (0010): MOE_AHEAD's posted candidates must equal a CPU reference
+// (integer-valued inputs, so every score is exact in any summation order), and
+// the copy queue must land data and the table word written after it.
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -11,7 +15,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -145,6 +151,130 @@ int main() {
 
     st.stop = true;
     echo.join();
+
+    // ---- MOE_AHEAD: two targets, top 8, filtered by each target's table ----
+    {
+        const int NE = 128, K = 8, D0 = 56, D1 = 40, T0 = LAYER + 1, T1 = LAYER + 2;
+        ggml_context * actx = ggml_init({ 16u << 20, nullptr, true });
+        ggml_tensor * ax = ggml_new_tensor_1d(actx, GGML_TYPE_F32, N_EMBD);
+        ggml_tensor * w[2], * r[2], * tbl[2];
+        for (int t = 0; t < 2; ++t) {
+            w[t]   = ggml_new_tensor_2d(actx, GGML_TYPE_F32, N_EMBD, NE);
+            r[t]   = ggml_new_tensor_1d(actx, GGML_TYPE_F32, N_EMBD);
+            tbl[t] = ggml_new_tensor_1d(actx, GGML_TYPE_I32, NE);
+        }
+        const int32_t targets[2] = { T0, T1 }, dummies[2] = { D0, D1 };
+        ggml_tensor * ahead = ggml_moe_ahead(actx, ax, w, r, tbl, 2, LAYER, targets, dummies, K, host_dev, dev_state);
+        ggml_cgraph * ag = ggml_new_graph(actx);
+        ggml_build_forward_expand(ag, ahead);
+        ggml_backend_buffer_t abuf = ggml_backend_alloc_ctx_tensors(actx, backend);
+        std::mt19937 rng(11);
+        auto * ctl = (ggml_moe_sc_ctl *) host;
+        int bad = 0;
+        const int runs = 200;
+        for (int k = 0; k < runs; ++k) {
+            std::vector<float> hxv(N_EMBD), hw[2], hr[2];
+            std::vector<int32_t> ht[2];
+            for (auto & v : hxv) v = (float) ((int) (rng() % 5) - 2);
+            for (int t = 0; t < 2; ++t) {
+                hw[t].resize((size_t) N_EMBD * NE);
+                for (auto & v : hw[t]) v = (float) ((int) (rng() % 7) - 3);
+                hr[t].resize(N_EMBD);
+                for (auto & v : hr[t]) v = (rng() % 3 == 0) ? 0.5f : (rng() % 2 ? 1.0f : 2.0f);
+                ht[t].resize(NE);
+                for (int e = 0; e < NE; ++e) ht[t][e] = rng() % 2 ? dummies[t] : e % 50;
+                ggml_backend_tensor_set(w[t], hw[t].data(), 0, hw[t].size() * sizeof(float));
+                ggml_backend_tensor_set(r[t], hr[t].data(), 0, hr[t].size() * sizeof(float));
+                ggml_backend_tensor_set(tbl[t], ht[t].data(), 0, NE * sizeof(int32_t));
+            }
+            ggml_backend_tensor_set(ax, hxv.data(), 0, N_EMBD * sizeof(float));
+            const uint32_t before = __atomic_load_n(&ctl->ahead_head, __ATOMIC_ACQUIRE);
+            if (ggml_backend_graph_compute(backend, ag) != GGML_STATUS_SUCCESS) { printf("FAIL ahead: compute\n"); return 1; }
+            const uint32_t after = __atomic_load_n(&ctl->ahead_head, __ATOMIC_ACQUIRE);
+            const ggml_moe_sc_ahead rec = ctl->ahead[before % GGML_MOE_SC_RING];
+            bool ok_run = after == before + 1 && rec.seq == before && rec.layer == (uint32_t) LAYER &&
+                          rec.target[0] == T0 && rec.target[1] == T1 && rec.t_ns != 0;
+            for (int t = 0; t < 2 && ok_run; ++t) {
+                std::vector<std::pair<double, int>> sc(NE);
+                for (int e = 0; e < NE; ++e) {
+                    double s = 0;
+                    for (int i = 0; i < N_EMBD; ++i) s += (double) hw[t][(size_t) e * N_EMBD + i] * hxv[i] * hr[t][i];
+                    sc[e] = { -s, e };     // best first, lower id on a tie
+                }
+                std::sort(sc.begin(), sc.end());
+                std::vector<int32_t> want;
+                for (int j = 0; j < K; ++j) {
+                    if (ht[t][sc[j].second] == dummies[t]) want.push_back(sc[j].second);
+                }
+                ok_run = rec.n[t] == want.size() && std::equal(want.begin(), want.end(), rec.ids[t]);
+            }
+            bad += !ok_run;
+        }
+        printf("%s ahead: %d runs, %d wrong\n", bad ? "FAIL" : "ok  ", runs, bad);
+        ok &= bad == 0;
+        ggml_backend_buffer_free(abuf);
+        ggml_free(actx);
+    }
+
+    // ---- copy queue: chunks then the table word, landed when the ticket says so ----
+    {
+        auto mnew  = (void * (*)(int, int, int)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_moe_mover_new");
+        auto mfree = (void (*)(void *)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_moe_mover_free");
+        auto mword = (const int32_t * (*)(void *, int)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_moe_mover_word");
+        auto mpush = (int64_t (*)(void *, void **, const void **, const size_t *, int)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_moe_mover_push");
+        auto mdone = (int64_t (*)(void *)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_moe_mover_done");
+        auto msync = (int64_t (*)(void *)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_moe_mover_sync");
+        auto pinned = (bool (*)(const void *)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_moe_is_pinned");
+        if (!mnew || !mfree || !mword || !mpush || !mdone || !msync || !pinned) { printf("FAIL: copy queue entry points missing\n"); return 1; }
+        const size_t EXP = 2831155, CH = 512 * 1024;
+        const int SLOTS = 4, NE = 128;
+        ggml_context * mctx = ggml_init({ 1u << 20, nullptr, true });
+        ggml_tensor * dst = ggml_new_tensor_1d(mctx, GGML_TYPE_I8, (int64_t) (EXP * SLOTS));
+        ggml_tensor * tab = ggml_new_tensor_1d(mctx, GGML_TYPE_I32, NE);
+        ggml_backend_buffer_t mbuf = ggml_backend_alloc_ctx_tensors(mctx, backend);
+        ggml_backend_buffer_t hbuf = ggml_backend_buft_alloc_buffer(ggml_backend_dev_host_buffer_type(dev), EXP * 8);
+        uint8_t * src = (uint8_t *) ggml_backend_buffer_get_base(hbuf);
+        std::vector<int32_t> dummy_tab(NE, SLOTS);
+        ggml_backend_tensor_set(tab, dummy_tab.data(), 0, NE * sizeof(int32_t));
+        void * m = mnew(0, 16, SLOTS + 1);
+        std::vector<uint8_t> plain(16);
+        bool mok = m && pinned(src) && !pinned(plain.data());
+        int wrong = 0;
+        for (int k = 0; k < 40 && mok; ++k) {
+            const int slot = k % SLOTS, expert = (k * 37) % 8, e_id = (k * 13) % NE;
+            for (size_t i = 0; i < EXP; ++i) src[(size_t) expert * EXP + i] = (uint8_t) (i * 7 + k);
+            int64_t last = 0;
+            for (size_t off = 0; off < EXP; off += CH) {
+                const size_t len = std::min(CH, EXP - off);
+                void * d[2] = { (char *) dst->data + (size_t) slot * EXP + off, nullptr };
+                const void * s2[2] = { src + (size_t) expert * EXP + off, nullptr };
+                size_t n[2] = { len, 0 };
+                int cnt = 1;
+                if (off + len == EXP) {
+                    d[1] = (char *) tab->data + (size_t) e_id * sizeof(int32_t);
+                    s2[1] = mword(m, slot);
+                    n[1] = sizeof(int32_t);
+                    cnt = 2;
+                }
+                last = mpush(m, d, s2, n, cnt);
+                if (last <= 0) { mok = false; break; }
+            }
+            while (mok && mdone(m) < last) {}
+            std::vector<uint8_t> got(EXP);
+            ggml_backend_tensor_get(dst, got.data(), (size_t) slot * EXP, EXP);
+            int32_t word = -1;
+            ggml_backend_tensor_get(tab, &word, (size_t) e_id * sizeof(int32_t), sizeof(int32_t));
+            wrong += memcmp(got.data(), src + (size_t) expert * EXP, EXP) != 0 || word != slot;
+            ggml_backend_tensor_set(tab, &SLOTS, (size_t) e_id * sizeof(int32_t), sizeof(int32_t));
+        }
+        mok = mok && msync(m) >= 0 && wrong == 0;
+        printf("%s copy queue: 40 experts, %d wrong\n", mok ? "ok  " : "FAIL", wrong);
+        ok &= mok;
+        mfree(m);
+        ggml_backend_buffer_free(hbuf);
+        ggml_backend_buffer_free(mbuf);
+        ggml_free(mctx);
+    }
     const int selftest = sc_test(0, 10000);
     printf("%s selftest: %d failed of 10000\n", selftest == 0 ? "ok  " : "FAIL", selftest);
     ok &= selftest == 0;

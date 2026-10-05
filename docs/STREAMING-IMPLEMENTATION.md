@@ -54,3 +54,48 @@ next step is a timeline of one missing layer, not tuning. If J6 fails, J4
 and the counters (offered, sent, landed, in time, late, unused, dropped)
 show whether prediction, lead time or bandwidth is short. Tuning (spec step
 4) is pre-registered separately, one paired change at a time.
+
+## Status, 2026-10-04: built, CPU tests pass, nothing run on the GPU yet
+
+The user asked for no GPU testing for now, so the sidecar queue (S3, S5, S4)
+was stopped before it started, and J1 to J7 wait. Patch 0010 builds for
+sm_120. 0008 + 0009 + 0010 applied to e67a8e3 reproduce `engine/` exactly
+(identical git tree).
+
+**J0: PASS.** Run once:
+- `test-moe-team`: 9,000 team jobs byte-identical to `ggml_graph_compute`
+  (F32, F16, Q4_K, Q5_K, Q6_K, Q8_0 × 1, 2 and 8 threads × 500 jobs, two team
+  regions each), with observation counts equal.
+- `test-moe-planner`: passes.
+- `test-moe-rows`: still passes (810 comparisons).
+
+`test-moe-sidecar` with the new J3 cases compiles; it needs the GPU.
+
+Where the build departs from the spec's wording, and why:
+
+- **`MOE_AHEAD` is its own op**, right after `MOE_POST`, rather than part of
+  it. A layer's misses are announced first, and the ~3 µs prediction does not
+  delay the CPU's start on them.
+- **The planner runs in the mover thread**, not the serve thread. The serve
+  thread spends its time computing misses, and a prediction should not wait
+  behind one. The serve thread tells the mover which layers have read their
+  tables, through a single-producer queue.
+- **The predictor's input** is x_L ⊙ (g_T / g_L), where x_L = rmsnorm(residual_L) · g_L
+  is the layer's router input. This equals rmsnorm(residual_L) · g_T, the
+  quantity P10 measured, without plumbing the residual into the op. A pair
+  whose g_L has a zero weight, or whose router is not F32, is skipped loudly.
+- **Recency of a streamed expert:** if its layer routed to it, it is promoted
+  like a hit; if not, it gets the oldest recency, so it is the first to go at
+  the boundary. The existing speculative probation, which protects a slot for
+  one boundary, is not used. Protecting an unused guess would keep it longer.
+- **Exactness of streaming (J5).** A token-boundary map cannot express a
+  mid-token flip. So with streaming, the recorded frame for a boundary is
+  written one step late, with the next token's in-time streamed experts placed
+  in the slots they used. Replaying that map without streaming must give the
+  same logits. With streaming on, the route trace prints the slot the GPU
+  used. Without streaming, that is the host's slot.
+- **Dedupe with the upload workers.** A worker copy that is between the
+  workers' queues is invisible to the check made when a job is offered. If the
+  same expert both streams in and is published by a worker, adoption keeps the
+  worker's slot and gives the streamed slot back. The layer's table is
+  rewritten from the mirrors at that step's flush.
