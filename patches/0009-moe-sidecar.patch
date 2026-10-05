@@ -1,9 +1,9 @@
 diff --git a/ggml/include/ggml-moe-sidecar.h b/ggml/include/ggml-moe-sidecar.h
 new file mode 100644
-index 0000000..f4cdf9e
+index 0000000..db133d1
 --- /dev/null
 +++ b/ggml/include/ggml-moe-sidecar.h
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,85 @@
 +#pragma once
 +
 +// Channel between a decode graph running on the GPU and a CPU thread that
@@ -49,6 +49,9 @@ index 0000000..f4cdf9e
 +    struct ggml_moe_sc_record ring[GGML_MOE_SC_RING];
 +    uint32_t resp[GGML_MOE_SC_MAX_LAYERS];                        // CPU writes
 +    int32_t  ids[GGML_MOE_SC_MAX_LAYERS][GGML_MOE_SC_MAX_USED];  // GPU writes
++    // the slot the GPU's table gave each routed expert; the host computes
++    // exactly the experts whose slot is the dummy, whatever its own table says
++    int32_t  slots[GGML_MOE_SC_MAX_LAYERS][GGML_MOE_SC_MAX_USED]; // GPU writes
 +};
 +
 +struct ggml_moe_sc_dev {
@@ -233,10 +236,10 @@ index f0a83c2..104dd01 100644
      }
 diff --git a/ggml/src/ggml-cuda/moe-sidecar.cu b/ggml/src/ggml-cuda/moe-sidecar.cu
 new file mode 100644
-index 0000000..d091b17
+index 0000000..a3c695b
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/moe-sidecar.cu
-@@ -0,0 +1,283 @@
+@@ -0,0 +1,284 @@
 +// MoE sidecar: the GPU publishes a layer's routed ids (and its input, if any
 +// routed expert is not in the device cache) to mapped host memory, carries on
 +// with the cached experts, and joins the host's rows afterwards. Protocol and
@@ -295,7 +298,8 @@ index 0000000..d091b17
 +        }
 +    }
 +    if (threadIdx.x < n_used) {
-+        ctl->ids[layer][threadIdx.x] = ids[threadIdx.x];
++        ctl->ids[layer][threadIdx.x]   = ids[threadIdx.x];
++        ctl->slots[layer][threadIdx.x] = slots[threadIdx.x];
 +    }
 +    if (threadIdx.x == 0) {
 +        ggml_moe_sc_record * r = &ctl->ring[seq % GGML_MOE_SC_RING];
@@ -685,7 +689,7 @@ index 4c364e7..46ad4f7 100644
      }
  
 diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
-index 00d502f..b678890 100644
+index 00d502f..619aa10 100644
 --- a/src/llama-moecache.cpp
 +++ b/src/llama-moecache.cpp
 @@ -11,6 +11,7 @@
@@ -709,10 +713,13 @@ index 00d502f..b678890 100644
  
  namespace {
  
-@@ -98,8 +105,39 @@ struct upload_job {
+@@ -96,10 +103,54 @@ struct upload_job {
+     int32_t slot;
+     bool    done = false;
      bool    spec = false;   // issued from a prediction, not from a real miss
- };
- 
++    bool    intoken = false; // published by the worker the moment it lands (sidecar only)
++};
++
 +// CPU side of the MoE sidecar (LLAMA_MOE_SIDECAR=1). The decode graph posts
 +// each cached layer's routed ids, and its input when an expert missed, to
 +// mapped host memory and keeps going; this thread observes the routing and
@@ -729,6 +736,11 @@ index 00d502f..b678890 100644
 +    std::vector<ggml_context *> ctxs;
 +    std::vector<ggml_cgraph *>  graph;     // by model layer: MOE_ROWS over the channel buffers
 +    std::vector<ggml_tensor *>  obs_ids;   // by model layer: ids view for routing-only records
++    // by model layer: expert -> 0, or the dummy for the experts the GPU posted
++    // as missed. The host decides from the GPU's view, not its own table, so a
++    // table entry published mid-token can never leave a row uncomputed.
++    std::vector<std::vector<int32_t>> miss_table;
++    std::vector<int32_t>              dummy;
 +    std::vector<const char *>   gate_name; // by model layer
 +
 +    std::thread             thr;
@@ -741,18 +753,72 @@ index 00d502f..b678890 100644
 +    bool                    failed = false;
 +
 +    uint64_t n_records = 0, n_miss_records = 0, serve_ns = 0;
-+};
 +
++    // In-token prediction (LLAMA_MOE_PREDICT_INTOKEN): a predicted expert is
++    // made visible to the GPU as soon as its copy lands. `intoken_step` marks
++    // when, so the layer's own record can say whether it arrived in time.
++    bool     intoken = false;
++    std::vector<std::vector<uint64_t>> intoken_step;  // [model layer][expert] = step + 1
++    uint64_t n_intoken_published = 0, n_intoken_in_time = 0, n_intoken_late = 0, n_intoken_unused = 0;
+ };
+ 
  struct moe_cache {
      int32_t n_slots     = 0;
 +    moe_sidecar * sc    = nullptr;
      int32_t max_inserts = 2;
      bool freeze_cache = false;
      bool deterministic = false;
-@@ -802,6 +840,132 @@ static void load_slot_profile(const char * spec, int32_t dflt) {
+@@ -323,7 +374,7 @@ int parse_layer_from_name(const char * name) {
+ // it empty. Measured: that inversion cost 4 tok/s and read exactly like "the
+ // predictor does not help".
+ int issue_uploads(moe_cache * mc, size_t li, const int32_t * ids, size_t n, int budget,
+-                  int min_keep = 0, bool spec = false) {
++                  int min_keep = 0, bool spec = false, bool intoken = false) {
+     if (mc->freeze_cache) {
+         return 0;
+     }
+@@ -359,6 +410,7 @@ int issue_uploads(moe_cache * mc, size_t li, const int32_t * ids, size_t n, int
+             ls.slot_in_flight[slot] = true;
+             upload_job job{li, id, slot};
+             job.spec = spec;
++            job.intoken = intoken;
+             mc->todo.push_back(job);
+             mc->n_uploads++;
+             mc->n_scheduled++;
+@@ -549,7 +601,8 @@ void moe_obs_cb(const char * name, const struct ggml_tensor * ids, void * ud) {
+                     }
+                 }
+                 issue_uploads(mc, nit->second, top.data(), n_issue, mc->predict_top,
+-                              /*min_keep=*/ mc->max_inserts, /*spec=*/ true);
++                              /*min_keep=*/ mc->max_inserts, /*spec=*/ true,
++                              /*intoken=*/ mc->sc && mc->sc->intoken);
+             }
+         }
+     }
+@@ -802,6 +855,198 @@ static void load_slot_profile(const char * spec, int32_t dflt) {
              g_slot_profile.size(), dflt);
  }
  
++
++void publish_intoken(moe_cache * mc, const upload_job & j) {
++    std::lock_guard<std::mutex> lk(mc->mtx);
++    auto & ls = mc->layers[j.layer_idx];
++    ls.slot_expert[j.slot]   = j.expert;
++    ls.expert_slot[j.expert] = j.slot;
++    if (mc->spec_probation) {
++        ls.slot_last_use[j.slot] = 1;
++        ls.slot_protect[j.slot]  = mc->n_steps + 1;
++    } else {
++        ls.slot_last_use[j.slot] = ++mc->clock;
++    }
++    ls.slot_in_flight[j.slot] = false;
++    set_table_entry(mc, ls, j.expert, j.slot);   // mirrors; reaches the device again at the next flush
++    const int32_t v = j.slot;
++    ggml_backend_tensor_set(ls.pub.dev_table, &v, (size_t) j.expert * sizeof(int32_t), sizeof(int32_t));
++    mc->sc->intoken_step[ls.pub.il][j.expert] = mc->n_steps + 1;
++    mc->sc->n_intoken_published++;
++    mc->n_published++;
++}
 +
 +void sidecar_serve(moe_cache * mc) {
 +    moe_sidecar * sc = mc->sc;
@@ -779,6 +845,13 @@ index 00d502f..b678890 100644
 +                sc->failed = true;
 +            } else if (rec.miss) {
 +                const auto t0 = std::chrono::steady_clock::now();
++                std::vector<int32_t> & mt = sc->miss_table[il];
++                const int n_used = (int) sc->obs_ids[il]->ne[0];
++                for (int e = 0; e < n_used; ++e) {
++                    if (ctl->slots[il][e] == sc->dummy[il]) {
++                        mt[ctl->ids[il][e]] = sc->dummy[il];
++                    }
++                }
 +                // computes the missed rows and observes the routing, exactly as the fused CPU op does in-graph
 +                if (ggml_backend_graph_compute(sc->cpu, sc->graph[il]) != GGML_STATUS_SUCCESS) {
 +                    fprintf(stderr, "moe-cache: sidecar CPU compute failed for layer %d\n", il);
@@ -786,11 +859,30 @@ index 00d502f..b678890 100644
 +                } else {
 +                    __atomic_store_n(&ctl->resp[il], rec.seq + 1, __ATOMIC_RELEASE);
 +                }
++                for (int e = 0; e < n_used; ++e) {
++                    mt[ctl->ids[il][e]] = 0;
++                }
 +                sc->serve_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
 +                    std::chrono::steady_clock::now() - t0).count();
 +                sc->n_miss_records++;
 +            } else {
 +                moe_obs_cb(sc->gate_name[il], sc->obs_ids[il], mc);
++            }
++            if (sc->intoken) {
++                // did this layer's in-token predictions arrive before the GPU read its table?
++                std::lock_guard<std::mutex> lk(mc->mtx);
++                const int n_used = (int) sc->obs_ids[il]->ne[0];
++                for (int e = 0; e < n_used; ++e) {
++                    const int32_t id = ctl->ids[il][e];
++                    if (sc->intoken_step[il][id] == mc->n_steps + 1) {
++                        if (ctl->slots[il][e] == sc->dummy[il]) {
++                            sc->n_intoken_late++;
++                        } else {
++                            sc->n_intoken_in_time++;
++                        }
++                        sc->intoken_step[il][id] = 0;
++                    }
++                }
 +            }
 +            sc->n_records++;
 +            sc->consumed++;
@@ -850,6 +942,9 @@ index 00d502f..b678890 100644
 +    sc->graph.assign(GGML_MOE_SC_MAX_LAYERS, nullptr);
 +    sc->obs_ids.assign(GGML_MOE_SC_MAX_LAYERS, nullptr);
 +    sc->gate_name.assign(GGML_MOE_SC_MAX_LAYERS, nullptr);
++    sc->miss_table.assign(GGML_MOE_SC_MAX_LAYERS, {});
++    sc->dummy.assign(GGML_MOE_SC_MAX_LAYERS, -1);
++    sc->intoken_step.assign(GGML_MOE_SC_MAX_LAYERS, {});
 +    auto * ctl = (ggml_moe_sc_ctl *) sc->host;
 +    for (const auto & ls : mc->layers) {
 +        const llama_moe_cache_layer & p = ls.pub;
@@ -861,7 +956,13 @@ index 00d502f..b678890 100644
 +        ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_used, 1);
 +        x->data   = ggml_moe_sc_x(sc->host, n_embd, il);
 +        ids->data = ctl->ids[il];
-+        ggml_tensor * rows = ggml_moe_rows(ctx, p.up_src, x, ids, p.host_table, p.gate_src, p.down_src, p.n_slots);
++        const int64_t n_expert = p.up_src->ne[2];
++        sc->miss_table[il].assign(n_expert, 0);
++        sc->intoken_step[il].assign(n_expert, 0);
++        sc->dummy[il] = p.n_slots;
++        ggml_tensor * table = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_expert);
++        table->data = sc->miss_table[il].data();
++        ggml_tensor * rows = ggml_moe_rows(ctx, p.up_src, x, ids, table, p.gate_src, p.down_src, p.n_slots);
 +        rows->data = ggml_moe_sc_rows(sc->host, n_embd, il);
 +        ggml_cgraph * gf = ggml_new_graph_custom(ctx, 8, false);
 +        ggml_build_forward_expand(gf, rows);
@@ -874,6 +975,17 @@ index 00d502f..b678890 100644
 +        ls.pub.sc_host_dev  = sc->host_dev;
 +        ls.pub.sc_dev_state = sc->dev_state;
 +    }
++    if (const char * e = getenv("LLAMA_MOE_PREDICT_INTOKEN"); e && atoi(e) != 0) {
++        if (!mc->have_pred || !mc->early_issue || !mc->batch_tables || mc->deterministic ||
++            mc->map_replay || mc->map_record || mc->freeze_cache) {
++            fprintf(stderr, "moe-cache: in-token prediction NOT enabled: needs LLAMA_MOE_PREDICTOR, "
++                    "LLAMA_MOE_EARLY_ISSUE=1 and LLAMA_MOE_BATCH_TABLES=1, and no replay/record/freeze/deterministic mode\n");
++        } else {
++            sc->intoken = true;
++            fprintf(stderr, "moe-cache: in-token prediction ENABLED: predicted experts for the next layer "
++                    "are usable as soon as their copy lands (top %d)\n", mc->predict_top);
++        }
++    }
 +    sc->thr = std::thread(sidecar_serve, mc);
 +    fprintf(stderr, "moe-cache: sidecar ENABLED (self-test %d/%d, %zu layers, %.1f MiB mapped)\n",
 +            n_test, n_test, mc->layers.size(), ggml_moe_sc_host_bytes(n_embd) / 1048576.0);
@@ -882,7 +994,26 @@ index 00d502f..b678890 100644
  void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t max_inserts) {
      std::lock_guard<std::mutex> init_lock(g_init_mtx);
      if (g_init_done) {
-@@ -1286,6 +1450,9 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+@@ -1222,7 +1467,17 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
+                                 mc->h2d_batch ? 1 : 0);
+                         fflush(stderr);
+                     }
+-                    {
++                    if (j.intoken) {
++                        // In-token prediction: the copy is complete (the batched
++                        // copy synchronised), so the GPU may use the slot from
++                        // now on. The slot was in no table, and one 4-byte
++                        // table word flips from the dummy to it: a graph that
++                        // reads the table before this sees a miss the sidecar
++                        // computes, one that reads it after sees a hit.
++                        publish_intoken(mc, j);
++                        std::lock_guard<std::mutex> lk(mc->wmtx);
++                        mc->n_copied++;
++                    } else {
+                         std::lock_guard<std::mutex> lk(mc->wmtx);
+                         j.done = true;
+                         mc->done.push_back(j);
+@@ -1286,6 +1541,9 @@ void llama_moe_cache_init(const llama_model & model, int32_t n_slots, int32_t ma
          if (mc->spec_probation) {
              fprintf(stderr, "moe-cache: speculative uploads enter on probation\n");
          }
@@ -892,7 +1023,7 @@ index 00d502f..b678890 100644
          fflush(stderr);
  
          ggml_set_moe_obs_callback(moe_obs_cb, mc);
-@@ -1313,7 +1480,49 @@ const llama_moe_cache_layer * llama_moe_cache_lookup(const ggml_tensor * up_exps
+@@ -1313,7 +1571,49 @@ const llama_moe_cache_layer * llama_moe_cache_lookup(const ggml_tensor * up_exps
  // Replay overwrites physical slots; deterministic publication must include every
  // routing callback from the completed graph before waiting for its uploads.
  bool llama_moe_cache_requires_sync() {
@@ -943,7 +1074,7 @@ index 00d502f..b678890 100644
  }
  
  void llama_moe_cache_step() {
-@@ -1321,6 +1530,9 @@ void llama_moe_cache_step() {
+@@ -1321,6 +1621,9 @@ void llama_moe_cache_step() {
      if (!mc) {
          return;
      }
@@ -953,7 +1084,7 @@ index 00d502f..b678890 100644
  
      if (mc->deterministic) {
          const auto start = std::chrono::steady_clock::now();
-@@ -1524,6 +1736,11 @@ void llama_moe_cache_step() {
+@@ -1524,6 +1827,16 @@ void llama_moe_cache_step() {
  
      map_frame(mc);
      if (mc->route_trace) GGML_ASSERT(fflush(mc->route_trace) == 0);
@@ -961,6 +1092,11 @@ index 00d502f..b678890 100644
 +        fprintf(stderr, "moe-cache: sidecar %" PRIu64 " records, %" PRIu64 " with a miss, %.1f us CPU per miss record\n",
 +                mc->sc->n_records, mc->sc->n_miss_records,
 +                mc->sc->n_miss_records ? mc->sc->serve_ns / 1000.0 / mc->sc->n_miss_records : 0.0);
++        if (mc->sc->intoken) {
++            fprintf(stderr, "moe-cache: in-token predictions %" PRIu64 " published, %" PRIu64 " used in time, "
++                    "%" PRIu64 " routed but too late, rest not routed in their token\n",
++                    mc->sc->n_intoken_published, mc->sc->n_intoken_in_time, mc->sc->n_intoken_late);
++        }
 +    }
      if (mc->deterministic && mc->n_steps % 512 == 0) {
          fprintf(stderr, "moe-cache: publication wait %.2f us/step\n",
